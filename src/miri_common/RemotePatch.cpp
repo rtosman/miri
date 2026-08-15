@@ -1661,11 +1661,11 @@ bool InstrumentProcess(HANDLE process,
             }
 
             if (result.stubBase == 0)
-{
+            {
                 result.stubBase = allocation.stubBase;
             }
             if (result.counterBase == 0)
-{
+            {
                 result.counterBase = allocation.counterBase;
             }
             result.stubBytes += allocation.stubCapacity;
@@ -1681,7 +1681,7 @@ bool InstrumentProcess(HANDLE process,
 
             std::vector<std::uint8_t> stubBytes(blockSiteCount * kStubStride, 0);
             for (std::size_t index = 0; index < blockSiteCount; ++index)
-{
+            {
                 PatchSite& site = *blockSites[index];
                 site.stubAddress = allocation.stubBase + index * kStubStride;
                 site.counterAddress = allocation.counterBase + index * sizeof(std::uint64_t);
@@ -1694,13 +1694,13 @@ bool InstrumentProcess(HANDLE process,
                 if (!site.useAbsolutePatch &&
                     !FitsRel32(patchAddress + kNearPatchBytes, site.stubAddress)) {
                     if (!site.absolutePatchable)
-{
+                    {
                         site.patchable = false;
                         site.status =
                             "skipped: nearby trampoline is outside rel32 range; "
                             "14-byte fallback unavailable";
                         if (!site.absoluteStatus.empty())
-{
+                        {
                             site.status += ": " + site.absoluteStatus;
                         }
                         continue;
@@ -1713,7 +1713,7 @@ bool InstrumentProcess(HANDLE process,
                 std::vector<std::uint8_t> stub;
                 std::string stubError;
                 if (!BuildStub(site, options.atomicCounters, stub, stubError))
-{
+                {
                     site.patchable = false;
                     site.status = "skipped: " + stubError;
                     continue;
@@ -1731,11 +1731,11 @@ bool InstrumentProcess(HANDLE process,
             }
             if (!WriteRemote(process, allocation.stubBase, stubBytes.data(), stubBytes.size(),
                              writeError))
-{
+            {
                 for (PatchSite* site : blockSites)
-{
+                {
                     if (site->patchable)
-{
+                    {
                         site->patchable = false;
                         site->status = "skipped: " + writeError;
                     }
@@ -1765,9 +1765,9 @@ bool InstrumentProcess(HANDLE process,
             }
 
             for (PatchSite* site : blockSites)
-{
+            {
                 if (site->patchable)
-{
+                {
                     readyPatchSites.push_back(site);
                 }
             }
@@ -1795,14 +1795,14 @@ bool InstrumentProcess(HANDLE process,
     }
 
     for (const auto& site : sites)
-{
+    {
         AddRecordsForSite(site, result);
     }
 
     std::sort(result.records.begin(), result.records.end(),
               [](const PatchResult& left, const PatchResult& right) {
                   if (left.function.rva != right.function.rva)
-{
+    {
                       return left.function.rva < right.function.rva;
                   }
                   return left.function.name < right.function.name;
@@ -1818,14 +1818,14 @@ bool ReadCounters(HANDLE process,
 {
     counters.assign(instrumentation.counterCount, 0);
     if (instrumentation.counterCount == 0)
-{
+    {
         return true;
     }
 
     for (const auto& block : instrumentation.counterBlocks)
-{
+    {
         if (block.counterCount == 0)
-{
+        {
             continue;
         }
         if (block.counterIndex > counters.size() ||
