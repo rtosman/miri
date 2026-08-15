@@ -8,7 +8,8 @@
 
 #include <windows.h>
 
-namespace miri {
+namespace miri
+{
 
 bool InstrumentProcess(HANDLE process,
                        std::uint64_t remoteImageBase,

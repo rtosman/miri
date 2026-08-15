@@ -4,9 +4,11 @@
 #include <string>
 #include <vector>
 
-namespace miri {
+namespace miri
+{
 
-struct FunctionSymbol {
+struct FunctionSymbol
+{
     std::wstring name;
     std::uint32_t rva = 0;
     std::uint32_t size = 0;
@@ -14,7 +16,8 @@ struct FunctionSymbol {
     std::uint32_t tag = 0;
 };
 
-struct PatchResult {
+struct PatchResult
+{
     FunctionSymbol function;
     bool patched = false;
     std::uint32_t patchOffset = 0;
@@ -26,17 +29,28 @@ struct PatchResult {
     std::string status;
 };
 
-struct InstrumentationResult {
+struct CounterBlock
+{
+    std::uint64_t remoteAddress = 0;
+    std::size_t counterIndex = 0;
+    std::size_t counterCount = 0;
+};
+
+struct InstrumentationResult
+{
     std::vector<PatchResult> records;
     std::uint64_t stubBase = 0;
     std::size_t stubBytes = 0;
     std::uint64_t counterBase = 0;
     std::size_t counterCount = 0;
     std::size_t counterBytes = 0;
+    std::vector<CounterBlock> counterBlocks;
 };
 
-struct PatchOptions {
+struct PatchOptions
+{
     bool atomicCounters = false;
+    bool verbose = false;
     std::size_t maxFunctions = 0;
 };
 

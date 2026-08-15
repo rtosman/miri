@@ -3,17 +3,20 @@
 #include <iomanip>
 #include <sstream>
 
-namespace miri {
+namespace miri
+{
 
 std::wstring Utf8ToWide(std::string_view value)
 {
-    if (value.empty()) {
+    if (value.empty())
+{
         return {};
     }
 
     const int required = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, value.data(),
                                              static_cast<int>(value.size()), nullptr, 0);
-    if (required <= 0) {
+    if (required <= 0)
+{
         return {};
     }
 
@@ -25,13 +28,15 @@ std::wstring Utf8ToWide(std::string_view value)
 
 std::string WideToUtf8(std::wstring_view value)
 {
-    if (value.empty()) {
+    if (value.empty())
+{
         return {};
     }
 
     const int required = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()),
                                              nullptr, 0, nullptr, nullptr);
-    if (required <= 0) {
+    if (required <= 0)
+{
         return {};
     }
 
@@ -50,18 +55,22 @@ std::string Win32ErrorMessage(DWORD error)
                                         0, nullptr);
 
     std::wstring wide;
-    if (length > 0 && buffer != nullptr) {
+    if (length > 0 && buffer != nullptr)
+{
         wide.assign(buffer, length);
-        while (!wide.empty() && (wide.back() == L'\r' || wide.back() == L'\n')) {
+        while (!wide.empty() && (wide.back() == L'\r' || wide.back() == L'\n'))
+{
             wide.pop_back();
         }
     }
 
-    if (buffer != nullptr) {
+    if (buffer != nullptr)
+{
         LocalFree(buffer);
     }
 
-    if (wide.empty()) {
+    if (wide.empty())
+{
         std::ostringstream stream;
         stream << "Win32 error " << error;
         return stream.str();
@@ -77,19 +86,23 @@ std::string LastWin32ErrorMessage()
 
 std::wstring QuoteCommandLineArgument(std::wstring_view argument)
 {
-    if (argument.empty()) {
+    if (argument.empty())
+{
         return L"\"\"";
     }
 
     bool needsQuotes = false;
-    for (const wchar_t ch : argument) {
-        if (ch == L' ' || ch == L'\t' || ch == L'\n' || ch == L'\v' || ch == L'"') {
+    for (const wchar_t ch : argument)
+{
+        if (ch == L' ' || ch == L'\t' || ch == L'\n' || ch == L'\v' || ch == L'"')
+{
             needsQuotes = true;
             break;
         }
     }
 
-    if (!needsQuotes) {
+    if (!needsQuotes)
+{
         return std::wstring(argument);
     }
 
@@ -97,27 +110,32 @@ std::wstring QuoteCommandLineArgument(std::wstring_view argument)
     result.push_back(L'"');
     std::size_t backslashes = 0;
 
-    for (const wchar_t ch : argument) {
-        if (ch == L'\\') {
+    for (const wchar_t ch : argument)
+{
+        if (ch == L'\\')
+{
             ++backslashes;
             continue;
         }
 
-        if (ch == L'"') {
+        if (ch == L'"')
+{
             result.append(backslashes * 2 + 1, L'\\');
             result.push_back(ch);
             backslashes = 0;
             continue;
         }
 
-        if (backslashes != 0) {
+        if (backslashes != 0)
+{
             result.append(backslashes, L'\\');
             backslashes = 0;
         }
         result.push_back(ch);
     }
 
-    if (backslashes != 0) {
+    if (backslashes != 0)
+{
         result.append(backslashes * 2, L'\\');
     }
 
@@ -130,12 +148,14 @@ std::wstring BuildCommandLine(const std::filesystem::path& exePath,
                               std::wstring_view rawArguments)
 {
     std::wstring commandLine = QuoteCommandLineArgument(exePath.wstring());
-    for (const auto& argument : arguments) {
+    for (const auto& argument : arguments)
+{
         commandLine.push_back(L' ');
         commandLine += QuoteCommandLineArgument(argument);
     }
 
-    if (!rawArguments.empty()) {
+    if (!rawArguments.empty())
+{
         commandLine.push_back(L' ');
         commandLine.append(rawArguments);
     }
@@ -153,21 +173,26 @@ std::string Hex64(std::uint64_t value)
 std::string CsvEscape(std::string_view value)
 {
     bool quote = false;
-    for (const char ch : value) {
-        if (ch == '"' || ch == ',' || ch == '\n' || ch == '\r') {
+    for (const char ch : value)
+{
+        if (ch == '"' || ch == ',' || ch == '\n' || ch == '\r')
+{
             quote = true;
             break;
         }
     }
 
-    if (!quote) {
+    if (!quote)
+{
         return std::string(value);
     }
 
     std::string output;
     output.push_back('"');
-    for (const char ch : value) {
-        if (ch == '"') {
+    for (const char ch : value)
+{
+        if (ch == '"')
+{
             output.push_back('"');
         }
         output.push_back(ch);
@@ -180,8 +205,10 @@ std::string HtmlEscape(std::string_view value)
 {
     std::string output;
     output.reserve(value.size());
-    for (const char ch : value) {
-        switch (ch) {
+    for (const char ch : value)
+{
+        switch (ch)
+{
         case '&':
             output += "&amp;";
             break;

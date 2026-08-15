@@ -4,9 +4,11 @@
 #include <string>
 #include <vector>
 
-namespace miri {
+namespace miri
+{
 
-struct RunConfig {
+struct RunConfig
+{
     std::vector<std::wstring> arguments;
     std::wstring rawArguments;
     std::filesystem::path workingDirectory;

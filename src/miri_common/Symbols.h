@@ -7,9 +7,11 @@
 #include <string>
 #include <vector>
 
-namespace miri {
+namespace miri
+{
 
-struct SymbolFilters {
+struct SymbolFilters
+{
     std::vector<std::wstring> includePatterns;
     std::vector<std::wstring> excludePatterns;
     std::size_t maxFunctions = 0;

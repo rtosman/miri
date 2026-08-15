@@ -7,13 +7,16 @@
 #include <regex>
 #include <sstream>
 
-namespace miri {
-namespace {
+namespace miri
+{
+namespace
+{
 
 std::string ReadTextFile(const std::filesystem::path& path, std::string& error)
 {
     std::ifstream file(path, std::ios::binary);
-    if (!file) {
+    if (!file)
+{
         error = "failed to open config file: " + WideToUtf8(path.wstring());
         return {};
     }
@@ -32,8 +35,10 @@ std::string ReadTextFile(const std::filesystem::path& path, std::string& error)
 std::string EscapeRegexKey(std::string_view key)
 {
     std::string escaped;
-    for (const char ch : key) {
-        if (std::string_view(R"(\.^$|()[]{}*+?)").find(ch) != std::string_view::npos) {
+    for (const char ch : key)
+{
+        if (std::string_view(R"(\.^$|()[]
+{}*+?)").find(ch) != std::string_view::npos) {
             escaped.push_back('\\');
         }
         escaped.push_back(ch);
@@ -46,15 +51,18 @@ std::string UnescapeJsonString(std::string_view input)
     std::string output;
     output.reserve(input.size());
 
-    for (std::size_t i = 0; i < input.size(); ++i) {
+    for (std::size_t i = 0; i < input.size(); ++i)
+{
         const char ch = input[i];
-        if (ch != '\\' || i + 1 >= input.size()) {
+        if (ch != '\\' || i + 1 >= input.size())
+{
             output.push_back(ch);
             continue;
         }
 
         const char escaped = input[++i];
-        switch (escaped) {
+        switch (escaped)
+{
         case '"':
         case '\\':
         case '/':
@@ -89,7 +97,8 @@ std::optional<std::string> ExtractString(const std::string& text, std::string_vi
     const std::regex pattern("\"" + EscapeRegexKey(key) + R"json("\s*:\s*"((?:\\.|[^"\\])*)")json",
                              std::regex::ECMAScript);
     std::smatch match;
-    if (!std::regex_search(text, match, pattern)) {
+    if (!std::regex_search(text, match, pattern))
+{
         return std::nullopt;
     }
     return UnescapeJsonString(match[1].str());
@@ -100,7 +109,8 @@ std::optional<bool> ExtractBool(const std::string& text, std::string_view key)
     const std::regex pattern("\"" + EscapeRegexKey(key) + R"("\s*:\s*(true|false))",
                              std::regex::ECMAScript | std::regex::icase);
     std::smatch match;
-    if (!std::regex_search(text, match, pattern)) {
+    if (!std::regex_search(text, match, pattern))
+{
         return std::nullopt;
     }
     return match[1].str() == "true" || match[1].str() == "TRUE" || match[1].str() == "True";
@@ -111,13 +121,16 @@ std::optional<std::size_t> ExtractSize(const std::string& text, std::string_view
     const std::regex pattern("\"" + EscapeRegexKey(key) + R"("\s*:\s*([0-9]+))",
                              std::regex::ECMAScript);
     std::smatch match;
-    if (!std::regex_search(text, match, pattern)) {
+    if (!std::regex_search(text, match, pattern))
+{
         return std::nullopt;
     }
 
-    try {
+    try
+{
         return static_cast<std::size_t>(std::stoull(match[1].str()));
-    } catch (...) {
+    } catch (...)
+{
         return std::nullopt;
     }
 }
@@ -128,7 +141,8 @@ std::optional<std::pair<std::size_t, std::size_t>> FindArrayBounds(const std::st
     const std::regex pattern("\"" + EscapeRegexKey(key) + R"("\s*:\s*\[)",
                              std::regex::ECMAScript);
     std::smatch match;
-    if (!std::regex_search(text, match, pattern)) {
+    if (!std::regex_search(text, match, pattern))
+{
         return std::nullopt;
     }
 
@@ -138,26 +152,35 @@ std::optional<std::pair<std::size_t, std::size_t>> FindArrayBounds(const std::st
     bool escaped = false;
     int depth = 1;
 
-    for (; pos < text.size(); ++pos) {
+    for (; pos < text.size(); ++pos)
+{
         const char ch = text[pos];
-        if (inString) {
-            if (escaped) {
+        if (inString)
+{
+            if (escaped)
+{
                 escaped = false;
-            } else if (ch == '\\') {
+            } else if (ch == '\\')
+{
                 escaped = true;
-            } else if (ch == '"') {
+            } else if (ch == '"')
+{
                 inString = false;
             }
             continue;
         }
 
-        if (ch == '"') {
+        if (ch == '"')
+{
             inString = true;
-        } else if (ch == '[') {
+        } else if (ch == '[')
+{
             ++depth;
-        } else if (ch == ']') {
+        } else if (ch == ']')
+{
             --depth;
-            if (depth == 0) {
+            if (depth == 0)
+{
                 return std::make_pair(begin, pos);
             }
         }
@@ -170,7 +193,8 @@ std::vector<std::string> ExtractStringArray(const std::string& text, std::string
 {
     std::vector<std::string> values;
     const auto bounds = FindArrayBounds(text, key);
-    if (!bounds) {
+    if (!bounds)
+{
         return values;
     }
 
@@ -188,7 +212,8 @@ std::vector<std::wstring> WidenAll(const std::vector<std::string>& values)
 {
     std::vector<std::wstring> wide;
     wide.reserve(values.size());
-    for (const auto& value : values) {
+    for (const auto& value : values)
+{
         wide.push_back(Utf8ToWide(value));
     }
     return wide;
@@ -204,13 +229,15 @@ std::filesystem::path DefaultReportPath(const std::filesystem::path& exePath)
 std::filesystem::path FindDefaultConfigPath(const std::filesystem::path& exePath)
 {
     const std::filesystem::path first = exePath.wstring() + L".miri.json";
-    if (std::filesystem::exists(first)) {
+    if (std::filesystem::exists(first))
+{
         return first;
     }
 
     std::filesystem::path second = exePath;
     second.replace_extension(L".miri.json");
-    if (std::filesystem::exists(second)) {
+    if (std::filesystem::exists(second))
+{
         return second;
     }
 
@@ -220,37 +247,45 @@ std::filesystem::path FindDefaultConfigPath(const std::filesystem::path& exePath
 bool LoadRunConfig(const std::filesystem::path& configPath, RunConfig& config, std::string& error)
 {
     const std::string text = ReadTextFile(configPath, error);
-    if (!error.empty()) {
+    if (!error.empty())
+{
         return false;
     }
 
     const auto argumentArray = ExtractStringArray(text, "arguments");
-    if (!argumentArray.empty()) {
+    if (!argumentArray.empty())
+{
         config.arguments = WidenAll(argumentArray);
-    } else if (const auto arguments = ExtractString(text, "arguments")) {
+    } else if (const auto arguments = ExtractString(text, "arguments"))
+{
         config.rawArguments = Utf8ToWide(*arguments);
     }
 
-    if (const auto rawArguments = ExtractString(text, "argumentsRaw")) {
+    if (const auto rawArguments = ExtractString(text, "argumentsRaw"))
+{
         config.rawArguments = Utf8ToWide(*rawArguments);
     }
 
-    if (const auto workingDirectory = ExtractString(text, "workingDirectory")) {
+    if (const auto workingDirectory = ExtractString(text, "workingDirectory"))
+{
         config.workingDirectory = Utf8ToWide(*workingDirectory);
     }
 
-    if (const auto outputPath = ExtractString(text, "outputPath")) {
+    if (const auto outputPath = ExtractString(text, "outputPath"))
+{
         config.outputPath = Utf8ToWide(*outputPath);
     }
 
     config.includePatterns = WidenAll(ExtractStringArray(text, "include"));
     config.excludePatterns = WidenAll(ExtractStringArray(text, "exclude"));
 
-    if (const auto atomicCounters = ExtractBool(text, "atomicCounters")) {
+    if (const auto atomicCounters = ExtractBool(text, "atomicCounters"))
+{
         config.atomicCounters = *atomicCounters;
     }
 
-    if (const auto maxFunctions = ExtractSize(text, "maxFunctions")) {
+    if (const auto maxFunctions = ExtractSize(text, "maxFunctions"))
+{
         config.maxFunctions = *maxFunctions;
     }
 

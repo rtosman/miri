@@ -8,7 +8,8 @@
 
 #include <windows.h>
 
-namespace miri {
+namespace miri
+{
 
 std::wstring Utf8ToWide(std::string_view value);
 std::string WideToUtf8(std::wstring_view value);

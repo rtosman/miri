@@ -10,16 +10,19 @@
 #include <string>
 #include <vector>
 
-namespace {
+namespace
+{
 
-struct Options {
+struct Options
+{
     std::filesystem::path reportPath;
     std::filesystem::path htmlPath;
     std::size_t top = 50;
     bool includeZero = false;
 };
 
-struct Row {
+struct Row
+{
     std::string symbol;
     std::string rva;
     std::uint64_t count = 0;
@@ -37,26 +40,34 @@ std::vector<std::string> ParseCsvLine(std::string_view line)
     std::string field;
     bool inQuotes = false;
 
-    for (std::size_t i = 0; i < line.size(); ++i) {
+    for (std::size_t i = 0; i < line.size(); ++i)
+{
         const char ch = line[i];
-        if (inQuotes) {
-            if (ch == '"' && i + 1 < line.size() && line[i + 1] == '"') {
+        if (inQuotes)
+{
+            if (ch == '"' && i + 1 < line.size() && line[i + 1] == '"')
+{
                 field.push_back('"');
                 ++i;
-            } else if (ch == '"') {
+            } else if (ch == '"')
+{
                 inQuotes = false;
-            } else {
+            } else
+{
                 field.push_back(ch);
             }
             continue;
         }
 
-        if (ch == '"') {
+        if (ch == '"')
+{
             inQuotes = true;
-        } else if (ch == ',') {
+        } else if (ch == ',')
+{
             fields.push_back(std::move(field));
             field.clear();
-        } else {
+        } else
+{
             field.push_back(ch);
         }
     }
@@ -67,25 +78,33 @@ std::vector<std::string> ParseCsvLine(std::string_view line)
 
 bool ParseOptions(int argc, wchar_t** argv, Options& options)
 {
-    if (argc < 2) {
+    if (argc < 2)
+{
         return false;
     }
 
     options.reportPath = std::filesystem::absolute(argv[1]);
 
-    for (int i = 2; i < argc; ++i) {
+    for (int i = 2; i < argc; ++i)
+{
         const std::wstring arg = argv[i];
-        if (arg == L"--include-zero") {
+        if (arg == L"--include-zero")
+{
             options.includeZero = true;
-        } else if (arg == L"--top" && i + 1 < argc) {
-            try {
+        } else if (arg == L"--top" && i + 1 < argc)
+{
+            try
+{
                 options.top = static_cast<std::size_t>(std::stoull(argv[++i]));
-            } catch (...) {
+            } catch (...)
+{
                 return false;
             }
-        } else if (arg == L"--html" && i + 1 < argc) {
+        } else if (arg == L"--html" && i + 1 < argc)
+{
             options.htmlPath = std::filesystem::absolute(argv[++i]);
-        } else {
+        } else
+{
             return false;
         }
     }
@@ -96,20 +115,23 @@ bool ParseOptions(int argc, wchar_t** argv, Options& options)
 bool LoadRows(const std::filesystem::path& reportPath, std::vector<Row>& rows, std::string& error)
 {
     std::ifstream input(reportPath, std::ios::binary);
-    if (!input) {
+    if (!input)
+{
         error = "failed to open report: " + miri::WideToUtf8(reportPath.wstring());
         return false;
     }
 
     std::string line;
-    if (!std::getline(input, line)) {
+    if (!std::getline(input, line))
+{
         error = "report is empty";
         return false;
     }
 
     const auto header = ParseCsvLine(line);
     std::map<std::string, std::size_t> columns;
-    for (std::size_t index = 0; index < header.size(); ++index) {
+    for (std::size_t index = 0; index < header.size(); ++index)
+{
         columns[header[index]] = index;
     }
 
@@ -128,13 +150,16 @@ bool LoadRows(const std::filesystem::path& reportPath, std::vector<Row>& rows, s
         return false;
     }
 
-    while (std::getline(input, line)) {
-        if (!line.empty() && line.back() == '\r') {
+    while (std::getline(input, line))
+{
+        if (!line.empty() && line.back() == '\r')
+{
             line.pop_back();
         }
 
         const auto fields = ParseCsvLine(line);
-        if (fields.size() <= std::max({symbolColumn, rvaColumn, countColumn, statusColumn})) {
+        if (fields.size() <= std::max(
+{symbolColumn, rvaColumn, countColumn, statusColumn})) {
             continue;
         }
 
@@ -142,9 +167,11 @@ bool LoadRows(const std::filesystem::path& reportPath, std::vector<Row>& rows, s
         row.symbol = fields[symbolColumn];
         row.rva = fields[rvaColumn];
         row.status = fields[statusColumn];
-        try {
+        try
+{
             row.count = std::stoull(fields[countColumn]);
-        } catch (...) {
+        } catch (...)
+{
             row.count = 0;
         }
         rows.push_back(std::move(row));
@@ -157,7 +184,8 @@ std::vector<Row> SelectRows(std::vector<Row> rows, const Options& options)
 {
     rows.erase(std::remove_if(rows.begin(), rows.end(),
                               [&options](const Row& row) {
-                                  if (row.status != "patched") {
+                                  if (row.status != "patched")
+{
                                       return true;
                                   }
                                   return !options.includeZero && row.count == 0;
@@ -165,13 +193,15 @@ std::vector<Row> SelectRows(std::vector<Row> rows, const Options& options)
                rows.end());
 
     std::sort(rows.begin(), rows.end(), [](const Row& left, const Row& right) {
-        if (left.count != right.count) {
+        if (left.count != right.count)
+{
             return left.count > right.count;
         }
         return left.symbol < right.symbol;
     });
 
-    if (options.top != 0 && rows.size() > options.top) {
+    if (options.top != 0 && rows.size() > options.top)
+{
         rows.resize(options.top);
     }
 
@@ -180,7 +210,8 @@ std::vector<Row> SelectRows(std::vector<Row> rows, const Options& options)
 
 void PrintHistogram(const std::vector<Row>& rows)
 {
-    if (rows.empty()) {
+    if (rows.empty())
+{
         std::cout << "no matching patched rows with non-zero counts\n";
         return;
     }
@@ -188,13 +219,15 @@ void PrintHistogram(const std::vector<Row>& rows)
     const std::uint64_t maxCount = rows.front().count;
     constexpr std::size_t barWidth = 56;
 
-    for (const auto& row : rows) {
+    for (const auto& row : rows)
+{
         const std::size_t width = maxCount == 0
                                       ? 0
                                       : static_cast<std::size_t>(
                                             (row.count * barWidth + maxCount - 1) / maxCount);
         std::cout << std::setw(12) << row.count << " | ";
-        for (std::size_t i = 0; i < width; ++i) {
+        for (std::size_t i = 0; i < width; ++i)
+{
             std::cout << '#';
         }
         std::cout << " " << row.symbol << " (" << row.rva << ")\n";
@@ -205,7 +238,8 @@ bool WriteHtml(const std::filesystem::path& htmlPath, const std::vector<Row>& ro
                std::string& error)
 {
     std::ofstream output(htmlPath, std::ios::binary);
-    if (!output) {
+    if (!output)
+{
         error = "failed to open HTML output: " + miri::WideToUtf8(htmlPath.wstring());
         return false;
     }
@@ -226,7 +260,8 @@ bool WriteHtml(const std::filesystem::path& htmlPath, const std::vector<Row>& ro
            << ".symbol{font-family:Consolas,monospace;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}\n"
            << "</style>\n</head>\n<body>\n<h1>miri function call histogram</h1>\n";
 
-    for (const auto& row : rows) {
+    for (const auto& row : rows)
+{
         const double percent = maxCount == 0 ? 0.0 : (100.0 * static_cast<double>(row.count)) /
                                                    static_cast<double>(maxCount);
         output << "<div class=\"row\"><div class=\"count\">" << row.count
@@ -247,14 +282,16 @@ bool WriteHtml(const std::filesystem::path& htmlPath, const std::vector<Row>& ro
 int wmain(int argc, wchar_t** argv)
 {
     Options options;
-    if (!ParseOptions(argc, argv, options)) {
+    if (!ParseOptions(argc, argv, options))
+{
         PrintUsage();
         return 2;
     }
 
     std::vector<Row> rows;
     std::string error;
-    if (!LoadRows(options.reportPath, rows, error)) {
+    if (!LoadRows(options.reportPath, rows, error))
+{
         std::cerr << error << "\n";
         return 2;
     }
@@ -262,9 +299,11 @@ int wmain(int argc, wchar_t** argv)
     const std::vector<Row> selected = SelectRows(std::move(rows), options);
     PrintHistogram(selected);
 
-    if (!options.htmlPath.empty()) {
+    if (!options.htmlPath.empty())
+{
         std::string htmlError;
-        if (!WriteHtml(options.htmlPath, selected, htmlError)) {
+        if (!WriteHtml(options.htmlPath, selected, htmlError))
+{
             std::cerr << htmlError << "\n";
             return 1;
         }

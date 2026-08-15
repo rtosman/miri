@@ -5,9 +5,11 @@
 #include <string>
 #include <vector>
 
-namespace miri {
+namespace miri
+{
 
-struct PeSection {
+struct PeSection
+{
     std::string name;
     std::uint32_t virtualAddress = 0;
     std::uint32_t virtualSize = 0;
@@ -15,7 +17,8 @@ struct PeSection {
     std::uint32_t characteristics = 0;
 };
 
-struct PeImageInfo {
+struct PeImageInfo
+{
     bool is64 = false;
     std::uint16_t machine = 0;
     std::uint64_t imageBase = 0;

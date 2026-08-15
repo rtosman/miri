@@ -21,10 +21,20 @@ The workspace builds two tools:
 
 ```powershell
 E:\miri-build\bin\Release\miri-run.exe C:\path\app.exe C:\path\app.pdb
+E:\miri-build\bin\Release\miri-run.exe --pid 1234 C:\path\app.pdb
 E:\miri-build\bin\Release\miri-hist.exe C:\path\app.exe.miri.csv --top 50 --html E:\miri-build\histogram.html
 ```
 
-`miri-run` accepts an optional third argument for a JSON configuration file. If it is omitted, the launcher looks for `<exe>.miri.json` and then `<exe-stem>.miri.json`.
+`miri-run` accepts an optional JSON configuration file. If it is omitted, the launcher looks for `<exe>.miri.json` and then `<exe-stem>.miri.json`.
+
+To instrument a process that is already running, pass `--pid <pid>` or `--attach <pid>`. The executable path is read from the process, and the PDB defaults to `<exe-stem>.pdb` when omitted:
+
+```powershell
+E:\miri-build\bin\Release\miri-run.exe --pid 1234
+E:\miri-build\bin\Release\miri-run.exe --pid 1234 C:\symbols\app.pdb C:\work\app.miri.json
+```
+
+Attach mode keeps `miri-run` attached as the debugger until the target exits, then reads the counters and writes the CSV report.
 
 Example:
 
