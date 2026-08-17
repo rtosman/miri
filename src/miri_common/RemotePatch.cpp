@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <cstring>
 #include <future>
 #include <iostream>
@@ -18,69 +19,72 @@ namespace miri
 namespace
 {
 
-constexpr std::size_t kNearPatchBytes = 5;
-constexpr std::size_t kAbsolutePatchBytes = 14;
-constexpr std::size_t kMaxCopiedBytes = 32;
-constexpr std::size_t kStubStride = 96;
-constexpr std::size_t kDefaultPatchSitesPerAllocation = 4096;
-constexpr std::size_t kHookPatchTaskSize = 10 * 1000;
-constexpr std::uint64_t kRel32Window = 0x7FFF0000ull;
-constexpr std::uint8_t kEndbr64[] = {0xF3, 0x0F, 0x1E, 0xFA};
+constexpr std::size_t kNearPatchBytes{5};
+constexpr std::size_t kAbsolutePatchBytes{14};
+constexpr std::size_t kMaxCopiedBytes{32};
+constexpr std::size_t kMaxAnalyzeBytes{128};
+constexpr std::size_t kStubStride{96};
+constexpr std::size_t kDefaultPatchSitesPerAllocation{4096};
+constexpr std::size_t kHookPatchTaskSize{10 * 1000};
+constexpr std::uint64_t kRel32Window{0x7FFF0000ull};
+constexpr std::uint8_t kEndbr64[]{0xF3, 0x0F, 0x1E, 0xFA};
 
 struct DecodedInstruction
 {
-    std::size_t length = 0;
-    bool invalid = false;
-    bool ripRelative = false;
-    bool controlFlow = false;
-    bool terminal = false;
-    const char* reason = "";
+    std::size_t length{0};
+    bool invalid{false};
+    bool ripRelative{false};
+    bool controlFlow{false};
+    bool relativeControlFlow{false};
+    bool terminal{false};
+    std::int64_t relativeTargetOffset{0};
+    const char* reason{""};
 };
 
 struct PatchSite
 {
-    std::uint32_t rva = 0;
+    std::uint32_t rva{0};
     std::vector<FunctionSymbol> symbols;
-    std::uint64_t remoteAddress = 0;
-    std::uint32_t patchOffset = 0;
-    std::uint32_t stolenLength = 0;
-    std::uint32_t nearStolenLength = 0;
-    std::uint32_t absoluteStolenLength = 0;
-    std::array<std::uint8_t, kMaxCopiedBytes> stolen = {};
-    bool patchable = false;
-    bool absolutePatchable = false;
-    bool useAbsolutePatch = false;
+    std::uint64_t remoteAddress{0};
+    std::uint32_t patchOffset{0};
+    std::uint32_t stolenLength{0};
+    std::uint32_t nearStolenLength{0};
+    std::uint32_t absoluteStolenLength{0};
+    std::array<std::uint8_t, kMaxCopiedBytes> stolen{};
+    bool patchable{false};
+    bool absolutePatchable{false};
+    bool useAbsolutePatch{false};
     std::string status;
     std::string absoluteStatus;
-    std::uint64_t stubAddress = 0;
-    std::uint64_t counterAddress = 0;
-    std::uint32_t counterIndex = UINT32_MAX;
+    std::uint64_t stubAddress{0};
+    std::uint64_t counterAddress{0};
+    std::uint32_t counterIndex{UINT32_MAX};
 };
 
 struct PatchAllocation
 {
-    std::uint64_t base = 0;
-    std::uint64_t stubBase = 0;
-    std::size_t stubCapacity = 0;
-    std::uint64_t counterBase = 0;
-    std::size_t counterCapacity = 0;
-    std::size_t siteCapacity = 0;
+    std::uint64_t base{0};
+    std::uint64_t stubBase{0};
+    std::size_t stubCapacity{0};
+    std::uint64_t counterBase{0};
+    std::size_t counterCapacity{0};
+    std::size_t siteCapacity{0};
 };
 
 struct RemoteSectionBytes
 {
-    std::uint32_t rva = 0;
-    std::uint32_t size = 0;
+    std::uint32_t rva{0};
+    std::uint32_t size{0};
     std::vector<std::uint8_t> bytes;
-    bool readable = false;
+    bool readable{false};
     std::string error;
 };
 
 struct ProtectedRegion
 {
-    std::uint64_t address = 0;
-    std::size_t size = 0;
-    DWORD oldProtect = 0;
+    std::uint64_t address{0};
+    std::size_t size{0};
+    DWORD oldProtect{0};
 };
 
 std::uint64_t AlignDown(std::uint64_t value, std::uint64_t alignment)
@@ -95,8 +99,8 @@ std::uint64_t AlignUp(std::uint64_t value, std::uint64_t alignment)
 
 bool FitsRel32(std::uint64_t sourceNext, std::uint64_t destination)
 {
-    const auto delta = static_cast<std::int64_t>(destination) -
-                       static_cast<std::int64_t>(sourceNext);
+    const auto delta{static_cast<std::int64_t>(destination) -
+                       static_cast<std::int64_t>(sourceNext)};
     return delta >= std::numeric_limits<std::int32_t>::min() &&
            delta <= std::numeric_limits<std::int32_t>::max();
 }
@@ -114,7 +118,7 @@ void AppendU8(std::vector<std::uint8_t>& code, std::uint8_t value)
 
 void AppendI32(std::vector<std::uint8_t>& code, std::int32_t value)
 {
-    const auto raw = static_cast<std::uint32_t>(value);
+    const auto raw{static_cast<std::uint32_t>(value)};
     code.push_back(static_cast<std::uint8_t>(raw & 0xFF));
     code.push_back(static_cast<std::uint8_t>((raw >> 8) & 0xFF));
     code.push_back(static_cast<std::uint8_t>((raw >> 16) & 0xFF));
@@ -123,8 +127,8 @@ void AppendI32(std::vector<std::uint8_t>& code, std::int32_t value)
 
 void AppendU64(std::vector<std::uint8_t>& code, std::uint64_t value)
 {
-    for (int shift = 0; shift < 64; shift += 8)
-{
+    for (int shift{0}; shift < 64; shift += 8)
+    {
         code.push_back(static_cast<std::uint8_t>((value >> shift) & 0xFF));
     }
 }
@@ -140,7 +144,7 @@ void AppendAbsoluteJump(std::vector<std::uint8_t>& code, std::uint64_t destinati
 bool IsPrefix(std::uint8_t byte)
 {
     switch (byte)
-{
+    {
     case 0xF0:
     case 0xF2:
     case 0xF3:
@@ -161,7 +165,7 @@ bool IsPrefix(std::uint8_t byte)
 bool IsBinaryModRmOpcode(std::uint8_t opcode)
 {
     switch (opcode)
-{
+    {
     case 0x00:
     case 0x01:
     case 0x02:
@@ -212,35 +216,37 @@ bool ParseModRm(const std::uint8_t* code,
                 std::uint8_t& reg)
 {
     if (index >= max)
-{
+    {
         return false;
     }
 
-    const std::uint8_t modrm = code[index++];
-    const std::uint8_t mod = (modrm >> 6) & 0x03;
-    reg = (modrm >> 3) & 0x07;
-    const std::uint8_t rm = modrm & 0x07;
+    const std::uint8_t modrm{code[index++]};
+    const std::uint8_t mod{static_cast<std::uint8_t>((modrm >> 6) & 0x03)};
+    reg = static_cast<std::uint8_t>((modrm >> 3) & 0x07);
+    const std::uint8_t rm{static_cast<std::uint8_t>(modrm & 0x07)};
 
     if (mod != 3 && rm == 4)
-{
+    {
         if (index >= max)
-{
+        {
             return false;
         }
-        const std::uint8_t sib = code[index++];
-        const std::uint8_t base = sib & 0x07;
+        const std::uint8_t sib{code[index++]};
+        const std::uint8_t base{static_cast<std::uint8_t>(sib & 0x07)};
         if (mod == 0 && base == 5)
-{
+        {
             if (index + 4 > max)
-{
+            {
                 return false;
             }
             index += 4;
         }
-    } else if (mod == 0 && rm == 5)
-{
+    } 
+    else 
+    if (mod == 0 && rm == 5)
+    {
         if (index + 4 > max)
-{
+        {
             return false;
         }
         index += 4;
@@ -248,16 +254,18 @@ bool ParseModRm(const std::uint8_t* code,
     }
 
     if (mod == 1)
-{
+    {
         if (index + 1 > max)
-{
+        {
             return false;
         }
         index += 1;
-    } else if (mod == 2)
-{
+    } 
+    else 
+    if (mod == 2)
+    {
         if (index + 4 > max)
-{
+        {
             return false;
         }
         index += 4;
@@ -270,70 +278,76 @@ DecodedInstruction DecodeX64Instruction(const std::uint8_t* code, std::size_t ma
 {
     DecodedInstruction decoded;
     if (max == 0)
-{
+    {
         decoded.invalid = true;
         decoded.reason = "truncated instruction";
         return decoded;
     }
 
-    std::size_t index = 0;
-    bool rexW = false;
-    bool operand16 = false;
-    bool addressOverride = false;
+    std::size_t index{0};
+    bool rexW{false};
+    bool operand16{false};
+    bool addressOverride{false};
 
     while (index < max && IsPrefix(code[index]))
 {
-        const std::uint8_t prefix = code[index++];
+        const std::uint8_t prefix{code[index++]};
         if (prefix == 0x66)
-{
+        {
             operand16 = true;
-        } else if (prefix == 0x67)
-{
+        } 
+        else 
+        if (prefix == 0x67)
+        {
             addressOverride = true;
-        } else if (prefix >= 0x40 && prefix <= 0x4F)
-{
+        } 
+        else 
+        if (prefix >= 0x40 && prefix <= 0x4F)
+        {
             rexW = (prefix & 0x08) != 0;
         }
     }
 
     if (addressOverride)
-{
+    {
         decoded.invalid = true;
         decoded.reason = "address-size override is unsupported";
         return decoded;
     }
 
     if (index >= max)
-{
+    {
         decoded.invalid = true;
         decoded.reason = "truncated opcode";
         return decoded;
     }
 
-    const std::uint8_t opcode = code[index++];
-    bool modRm = false;
-    std::size_t immediate = 0;
-    bool groupF6F7 = false;
-    bool groupFF = false;
+    const std::uint8_t opcode{code[index++]};
+    bool modRm{false};
+    std::size_t immediate{0};
+    bool groupF6F7{false};
+    bool groupFF{false};
 
     if (opcode == 0x0F)
-{
+    {
         if (index >= max)
-{
+        {
             decoded.invalid = true;
             decoded.reason = "truncated two-byte opcode";
             return decoded;
         }
 
-        const std::uint8_t opcode2 = code[index++];
+        const std::uint8_t opcode2{code[index++]};
         if (opcode2 >= 0x80 && opcode2 <= 0x8F)
-{
+        {
             decoded.controlFlow = true;
+            decoded.relativeControlFlow = true;
             immediate = 4;
-        } else
-{
+        } 
+        else
+        {
             switch (opcode2)
-{
+            {
             case 0x01:
             case 0x10:
             case 0x11:
@@ -466,23 +480,33 @@ DecodedInstruction DecodeX64Instruction(const std::uint8_t* code, std::size_t ma
                 return decoded;
             }
         }
-    } else if (opcode >= 0x70 && opcode <= 0x7F)
-{
+    }
+    else
+    if (opcode >= 0x70 && opcode <= 0x7F)
+    {
         decoded.controlFlow = true;
+        decoded.relativeControlFlow = true;
         immediate = 1;
-    } else if (opcode >= 0xB0 && opcode <= 0xB7)
-{
+    }
+    else
+    if (opcode >= 0xB0 && opcode <= 0xB7)
+    {
         immediate = 1;
-    } else if (opcode >= 0xB8 && opcode <= 0xBF)
-{
+    }
+    else
+    if (opcode >= 0xB8 && opcode <= 0xBF)
+    {
         immediate = rexW ? 8u : OperandImmediateSize(operand16);
-    } else if (IsBinaryModRmOpcode(opcode))
-{
+    }
+    else
+    if (IsBinaryModRmOpcode(opcode))
+    {
         modRm = true;
-    } else
-{
+    }
+    else
+    {
         switch (opcode)
-{
+        {
         case 0x04:
         case 0x0C:
         case 0x14:
@@ -608,15 +632,18 @@ DecodedInstruction DecodeX64Instruction(const std::uint8_t* code, std::size_t ma
         case 0xE2:
         case 0xE3:
             decoded.controlFlow = true;
+            decoded.relativeControlFlow = true;
             immediate = 1;
             break;
         case 0xE8:
         case 0xE9:
             decoded.controlFlow = true;
+            decoded.relativeControlFlow = true;
             immediate = 4;
             break;
         case 0xEB:
             decoded.controlFlow = true;
+            decoded.relativeControlFlow = true;
             immediate = 1;
             break;
         default:
@@ -626,70 +653,101 @@ DecodedInstruction DecodeX64Instruction(const std::uint8_t* code, std::size_t ma
         }
 
         if (opcode == 0x69)
-{
+        {
             immediate = OperandImmediateSize(operand16);
-        } else if (opcode == 0x6B || opcode == 0x80 || opcode == 0x82 ||
+        }
+        else
+        if (opcode == 0x6B || opcode == 0x80 || opcode == 0x82 ||
                    opcode == 0x83 || opcode == 0xC0 || opcode == 0xC1 ||
                    opcode == 0xC6) {
             immediate = 1;
-        } else if (opcode == 0x81 || opcode == 0xC7)
-{
+        }
+        else
+        if (opcode == 0x81 || opcode == 0xC7)
+        {
             immediate = OperandImmediateSize(operand16);
-        } else if (opcode == 0xF6 || opcode == 0xF7)
-{
+        }
+        else
+        if (opcode == 0xF6 || opcode == 0xF7)
+        {
             groupF6F7 = true;
-        } else if (opcode == 0xFF)
-{
+        }
+        else
+        if (opcode == 0xFF)
+        {
             groupFF = true;
         }
     }
 
-    std::uint8_t modRmReg = 0;
+    std::uint8_t modRmReg{0};
     if (modRm)
-{
+    {
         if (!ParseModRm(code, max, index, decoded.ripRelative, modRmReg))
-{
+        {
             decoded.invalid = true;
             decoded.reason = "truncated ModRM";
             return decoded;
         }
 
         if (groupF6F7 && modRmReg <= 1)
-{
+        {
             immediate = opcode == 0xF6 ? 1u : OperandImmediateSize(operand16);
         }
 
         if (groupFF && modRmReg >= 2 && modRmReg <= 5)
-{
+        {
             decoded.controlFlow = true;
         }
     }
 
     if (index + immediate > max)
-{
+    {
         decoded.invalid = true;
         decoded.reason = "truncated immediate";
         return decoded;
     }
+
+    const std::size_t immediateOffset{index};
     index += immediate;
 
     if (index == 0 || index > 15)
-{
+    {
         decoded.invalid = true;
         decoded.reason = "invalid instruction length";
         return decoded;
     }
 
     decoded.length = index;
+    if (decoded.relativeControlFlow)
+    {
+        std::int64_t displacement{0};
+        if (immediate == 1)
+        {
+            displacement = static_cast<std::int8_t>(code[immediateOffset]);
+        }
+        else
+        if (immediate == 4)
+        {
+            std::int32_t value{0};
+            std::memcpy(&value, code + immediateOffset, sizeof(value));
+            displacement = value;
+        }
+        else
+        {
+            decoded.relativeControlFlow = false;
+        }
+        decoded.relativeTargetOffset = static_cast<std::int64_t>(decoded.length) + displacement;
+    }
     return decoded;
 }
 
 bool ReadRemote(HANDLE process, std::uint64_t address, void* buffer, std::size_t size,
                 std::string& error)
 {
-    SIZE_T bytesRead = 0;
+    SIZE_T bytesRead{0};
     if (!ReadProcessMemory(process, reinterpret_cast<LPCVOID>(address), buffer, size, &bytesRead) ||
-        bytesRead != size) {
+        bytesRead != size)
+    {
         error = "ReadProcessMemory failed at " + Hex64(address) + ": " + LastWin32ErrorMessage();
         return false;
     }
@@ -699,10 +757,11 @@ bool ReadRemote(HANDLE process, std::uint64_t address, void* buffer, std::size_t
 bool WriteRemote(HANDLE process, std::uint64_t address, const void* buffer, std::size_t size,
                  std::string& error)
 {
-    SIZE_T bytesWritten = 0;
+    SIZE_T bytesWritten{0};
     if (!WriteProcessMemory(process, reinterpret_cast<LPVOID>(address), buffer, size,
                             &bytesWritten) ||
-        bytesWritten != size) {
+        bytesWritten != size)
+    {
         error = "WriteProcessMemory failed at " + Hex64(address) + ": " + LastWin32ErrorMessage();
         return false;
     }
@@ -712,12 +771,12 @@ bool WriteRemote(HANDLE process, std::uint64_t address, const void* buffer, std:
 std::size_t WorkerCountFor(std::size_t itemCount, std::size_t minItemsPerWorker)
 {
     if (itemCount == 0)
-{
+    {
         return 1;
     }
 
-    const unsigned hardware = std::thread::hardware_concurrency();
-    const std::size_t maxWorkers = hardware == 0 ? 4 : hardware;
+    const unsigned hardware{std::thread::hardware_concurrency()};
+    const std::size_t maxWorkers{hardware == 0 ? 4 : hardware};
     return std::max<std::size_t>(
         1, std::min(maxWorkers, (itemCount + minItemsPerWorker - 1) / minItemsPerWorker));
 }
@@ -731,7 +790,7 @@ void LogStdout(bool verbose, const std::string& line)
     std::cout << line << std::endl;
 }
 
-bool AnalyzePatchSite(const std::array<std::uint8_t, kMaxCopiedBytes>& bytes,
+bool AnalyzePatchSite(const std::array<std::uint8_t, kMaxAnalyzeBytes>& bytes,
                       std::uint32_t functionSize,
                       PatchSite& site);
 
@@ -741,15 +800,15 @@ std::vector<RemoteSectionBytes> ReadExecutableSections(HANDLE process,
 {
     std::vector<RemoteSectionBytes> sections;
     for (const auto& section : image.sections)
-{
+    {
         if ((section.characteristics & IMAGE_SCN_MEM_EXECUTE) == 0)
-{
+        {
             continue;
         }
 
-        const std::uint32_t size = std::max(section.virtualSize, section.rawSize);
+        const std::uint32_t size{std::max(section.virtualSize, section.rawSize)};
         if (size == 0)
-{
+        {
             continue;
         }
 
@@ -763,7 +822,7 @@ std::vector<RemoteSectionBytes> ReadExecutableSections(HANDLE process,
                                             remoteSection.bytes.size(),
                                             remoteSection.error);
         if (!remoteSection.readable)
-{
+        {
             remoteSection.bytes.clear();
         }
         sections.push_back(std::move(remoteSection));
@@ -776,14 +835,15 @@ const RemoteSectionBytes* FindSectionBytes(const std::vector<RemoteSectionBytes>
                                            std::size_t size)
 {
     for (const auto& section : sections)
-{
-        const std::uint64_t begin = section.rva;
-        const std::uint64_t end = begin + section.size;
+    {
+        const std::uint64_t begin{section.rva};
+        const std::uint64_t end{begin + section.size};
         if (rva >= begin && static_cast<std::uint64_t>(rva) + size <= end)
-{
+        {
             return &section;
         }
     }
+
     return nullptr;
 }
 
@@ -791,32 +851,33 @@ void LoadPatchWindow(HANDLE process,
                      const std::vector<RemoteSectionBytes>& sections,
                      PatchSite& site)
 {
-    std::array<std::uint8_t, kMaxCopiedBytes> bytes = {};
-    const RemoteSectionBytes* section = FindSectionBytes(sections, site.rva, bytes.size());
+    std::array<std::uint8_t, kMaxAnalyzeBytes> bytes{};
+    const RemoteSectionBytes* section{FindSectionBytes(sections, site.rva, bytes.size())};
     if (section != nullptr && section->readable)
-{
-        const std::size_t offset = site.rva - section->rva;
+    {
+        const std::size_t offset{site.rva - section->rva};
         std::memcpy(bytes.data(), section->bytes.data() + offset, bytes.size());
-        const std::uint32_t size = site.symbols.empty() ? 0 : site.symbols.front().size;
+        const std::uint32_t size{site.symbols.empty() ? 0 : site.symbols.front().size};
         AnalyzePatchSite(bytes, size, site);
         return;
     }
 
     std::string readError;
     if (!ReadRemote(process, site.remoteAddress, bytes.data(), bytes.size(), readError))
-{
+    {
         site.patchable = false;
         if (section != nullptr && !section->error.empty())
-{
+        {
             site.status = "skipped: section bulk read failed and " + readError;
         } else
-{
+        {
             site.status = "skipped: " + readError;
         }
+
         return;
     }
 
-    const std::uint32_t size = site.symbols.empty() ? 0 : site.symbols.front().size;
+    const std::uint32_t size{site.symbols.empty() ? 0 : site.symbols.front().size};
     AnalyzePatchSite(bytes, size, site);
 }
 
@@ -825,43 +886,45 @@ void AnalyzeSites(HANDLE process,
                   std::vector<PatchSite>& sites)
 {
     if (sites.empty())
-{
+    {
         return;
     }
 
-    const std::size_t minSitesPerWorker = 4096;
-    const std::size_t workerCount = WorkerCountFor(sites.size(), minSitesPerWorker);
+    const std::size_t minSitesPerWorker{4096};
+    const std::size_t workerCount{WorkerCountFor(sites.size(), minSitesPerWorker)};
 
     if (workerCount == 1)
-{
+    {
         for (auto& site : sites)
-{
+        {
             LoadPatchWindow(process, sections, site);
         }
+
         return;
     }
 
     std::vector<std::future<void>> workers;
     workers.reserve(workerCount);
-    for (std::size_t worker = 0; worker < workerCount; ++worker)
+    for (std::size_t worker{0}; worker < workerCount; ++worker)
 {
-        const std::size_t begin = worker * sites.size() / workerCount;
-        const std::size_t end = (worker + 1) * sites.size() / workerCount;
-        workers.push_back(std::async(std::launch::async, [process, &sections, &sites, begin, end] {
-            for (std::size_t index = begin; index < end; ++index)
-{
+        const std::size_t begin{worker * sites.size() / workerCount};
+        const std::size_t end{(worker + 1) * sites.size() / workerCount};
+        workers.push_back(std::async(std::launch::async, [process, &sections, &sites, begin, end]
+        {
+            for (std::size_t index{begin}; index < end; ++index)
+            {
                 LoadPatchWindow(process, sections, sites[index]);
             }
         }));
     }
 
     for (auto& worker : workers)
-{
+    {
         worker.get();
     }
 }
 
-bool AnalyzePatchWindow(const std::array<std::uint8_t, kMaxCopiedBytes>& bytes,
+bool AnalyzePatchWindow(const std::array<std::uint8_t, kMaxAnalyzeBytes>& bytes,
                         std::uint32_t functionSize,
                         std::size_t patchOffset,
                         std::size_t requiredBytes,
@@ -869,52 +932,53 @@ bool AnalyzePatchWindow(const std::array<std::uint8_t, kMaxCopiedBytes>& bytes,
                         std::string& status)
 {
     if (functionSize != 0 && functionSize <= patchOffset)
-{
+    {
         status = "function body is too small";
         return false;
     }
 
     stolen = 0;
     while (stolen < requiredBytes)
-{
+    {
         if (patchOffset + stolen >= bytes.size())
-{
+        {
             status = "function entry is truncated";
             return false;
         }
 
-        const auto decoded = DecodeX64Instruction(bytes.data() + patchOffset + stolen,
-                                                  bytes.size() - patchOffset - stolen);
+        const auto decoded{DecodeX64Instruction(bytes.data() + patchOffset + stolen,
+                                                  bytes.size() - patchOffset - stolen)};
         if (decoded.invalid)
-{
+        {
             status = decoded.reason;
             return false;
         }
+
         if (decoded.ripRelative)
-{
+        {
             status = "RIP-relative instruction in patch window";
             return false;
         }
         if (decoded.controlFlow)
-{
+        {
             status = "control-flow instruction in patch window";
             return false;
         }
         if (decoded.terminal)
-{
+        {
             status = "terminal instruction in patch window";
             return false;
         }
 
         stolen += decoded.length;
         if (stolen > kMaxCopiedBytes)
-{
+        {
             status = "patch window is too large";
             return false;
         }
 
         if (functionSize != 0 && patchOffset + stolen > functionSize)
-{
+        {
             status = "function body is smaller than patch window";
             return false;
         }
@@ -923,39 +987,105 @@ bool AnalyzePatchWindow(const std::array<std::uint8_t, kMaxCopiedBytes>& bytes,
     return true;
 }
 
-bool AnalyzePatchSite(const std::array<std::uint8_t, kMaxCopiedBytes>& bytes,
+bool HasDirectBranchIntoPatchWindow(const std::array<std::uint8_t, kMaxAnalyzeBytes>& bytes,
+                                    std::uint32_t functionSize,
+                                    std::size_t patchOffset,
+                                    std::size_t stolen,
+                                    std::string& status)
+{
+    if (functionSize == 0 || stolen == 0)
+    {
+        return false;
+    }
+
+    const std::size_t patchBegin{patchOffset};
+    const std::size_t patchEnd{patchOffset + stolen};
+    const std::size_t scanEnd{std::min<std::size_t>(functionSize, bytes.size())};
+    if (patchEnd >= scanEnd)
+    {
+        return false;
+    }
+
+    std::size_t offset{patchEnd};
+    while (offset < scanEnd)
+    {
+        const auto decoded{DecodeX64Instruction(bytes.data() + offset, scanEnd - offset)};
+        if (decoded.invalid || decoded.length == 0)
+        {
+            return false;
+        }
+
+        if (decoded.relativeControlFlow)
+        {
+            const std::int64_t target{static_cast<std::int64_t>(offset) + decoded.relativeTargetOffset};
+            if (target >= static_cast<std::int64_t>(patchBegin) &&
+                target < static_cast<std::int64_t>(patchEnd)) {
+                std::ostringstream stream;
+                stream << "direct branch at +" << Hex64(offset)
+                       << " targets overwritten patch bytes at +"
+                       << Hex64(static_cast<std::uint64_t>(target));
+                status = stream.str();
+                return true;
+            }
+        }
+
+        if (decoded.terminal)
+        {
+            break;
+        }
+
+        offset += decoded.length;
+    }
+
+    return false;
+}
+
+bool AnalyzePatchSite(const std::array<std::uint8_t, kMaxAnalyzeBytes>& bytes,
                       std::uint32_t functionSize,
                       PatchSite& site)
 {
-    std::size_t patchOffset = 0;
+    std::size_t patchOffset{0};
     if (std::memcmp(bytes.data(), kEndbr64, sizeof(kEndbr64)) == 0)
-{
+    {
         patchOffset = sizeof(kEndbr64);
     }
 
-    std::size_t nearStolen = 0;
+    std::size_t nearStolen{0};
     std::string nearStatus;
     if (!AnalyzePatchWindow(bytes, functionSize, patchOffset, kNearPatchBytes, nearStolen,
                             nearStatus)) {
         site.status = "skipped: " + nearStatus;
         return false;
     }
+    if (HasDirectBranchIntoPatchWindow(bytes, functionSize, patchOffset, nearStolen,
+                                       nearStatus)) {
+        site.status = "skipped: " + nearStatus;
+        return false;
+    }
 
-    std::size_t absoluteStolen = 0;
+    std::size_t absoluteStolen{0};
     std::string absoluteStatus;
     if (AnalyzePatchWindow(bytes, functionSize, patchOffset, kAbsolutePatchBytes, absoluteStolen,
                            absoluteStatus)) {
-        site.absolutePatchable = true;
-        site.absoluteStolenLength = static_cast<std::uint32_t>(absoluteStolen);
-    } else
-{
+        if (HasDirectBranchIntoPatchWindow(bytes, functionSize, patchOffset, absoluteStolen,
+                                           absoluteStatus)) {
+            site.absoluteStatus = absoluteStatus;
+        }
+        else
+        {
+            site.absolutePatchable = true;
+            site.absoluteStolenLength = static_cast<std::uint32_t>(absoluteStolen);
+        }
+    }
+    else
+    {
         site.absoluteStatus = absoluteStatus;
     }
 
     site.patchOffset = static_cast<std::uint32_t>(patchOffset);
     site.nearStolenLength = static_cast<std::uint32_t>(nearStolen);
     site.stolenLength = site.nearStolenLength;
-    const std::size_t copied = std::min(bytes.size() - patchOffset, site.stolen.size());
+    const std::size_t copied{std::min(bytes.size() - patchOffset, site.stolen.size())};
     std::memcpy(site.stolen.data(), bytes.data() + patchOffset, copied);
     site.patchable = true;
     site.status = "planned";
@@ -978,15 +1108,15 @@ std::vector<PatchSite> BuildSites(HANDLE process,
     std::vector<PatchSite> sites;
     sites.reserve(functions.size());
 
-    for (std::size_t index = 0; index < functions.size();)
-{
-        const std::uint32_t rva = functions[index].rva;
+    for (std::size_t index{0}; index < functions.size();)
+    {
+        const std::uint32_t rva{functions[index].rva};
         PatchSite site;
         site.rva = rva;
         site.remoteAddress = remoteImageBase + rva;
 
         do
-{
+        {
             site.symbols.push_back(functions[index]);
             ++index;
         } while (index < functions.size() && functions[index].rva == rva);
@@ -1001,15 +1131,14 @@ std::vector<PatchSite> BuildSites(HANDLE process,
     }
 
     LogStdout(verbose, "miri: reading executable sections for bulk analysis");
-    const std::vector<RemoteSectionBytes> sections =
-        ReadExecutableSections(process, remoteImageBase, image);
+    const std::vector<RemoteSectionBytes> sections{ReadExecutableSections(process, remoteImageBase, image)};
     {
-        std::size_t readableSections = 0;
-        std::size_t readableBytes = 0;
+        std::size_t readableSections{0};
+        std::size_t readableBytes{0};
         for (const auto& section : sections)
-{
+        {
             if (section.readable)
-{
+            {
                 ++readableSections;
                 readableBytes += section.bytes.size();
             }
@@ -1026,9 +1155,9 @@ std::vector<PatchSite> BuildSites(HANDLE process,
     LogStdout(verbose, "miri: finished analyzing patch windows");
 
     for (const auto& section : sections)
-{
+    {
         if (!section.readable)
-{
+        {
             error = section.error;
             break;
         }
@@ -1039,53 +1168,51 @@ std::vector<PatchSite> BuildSites(HANDLE process,
 
 std::uint64_t AllocateNear(HANDLE process, std::uint64_t nearAddress, std::size_t size)
 {
-    SYSTEM_INFO systemInfo = {};
+    SYSTEM_INFO systemInfo{};
     GetSystemInfo(&systemInfo);
 
-    const std::uint64_t granularity = systemInfo.dwAllocationGranularity;
-    const std::uint64_t alignedSize = AlignUp(size, systemInfo.dwPageSize);
-    const std::uint64_t minAddress =
-        reinterpret_cast<std::uint64_t>(systemInfo.lpMinimumApplicationAddress);
-    const std::uint64_t maxAddress =
-        reinterpret_cast<std::uint64_t>(systemInfo.lpMaximumApplicationAddress);
-    const std::uint64_t lower = nearAddress > kRel32Window ?
+    const std::uint64_t granularity{systemInfo.dwAllocationGranularity};
+    const std::uint64_t alignedSize{AlignUp(size, systemInfo.dwPageSize)};
+    const std::uint64_t minAddress{reinterpret_cast<std::uint64_t>(systemInfo.lpMinimumApplicationAddress)};
+    const std::uint64_t maxAddress{reinterpret_cast<std::uint64_t>(systemInfo.lpMaximumApplicationAddress)};
+    const std::uint64_t lower{nearAddress > kRel32Window ?
         std::max(minAddress, nearAddress - kRel32Window) :
-        minAddress;
-    const std::uint64_t upper = nearAddress > maxAddress - kRel32Window ?
+        minAddress};
+    const std::uint64_t upper{nearAddress > maxAddress - kRel32Window ?
         maxAddress :
-        std::min(maxAddress, nearAddress + kRel32Window);
+        std::min(maxAddress, nearAddress + kRel32Window)};
 
-    std::uint64_t address = lower;
+    std::uint64_t address{lower};
     while (address < upper)
-{
-        MEMORY_BASIC_INFORMATION info = {};
-        const SIZE_T queried = VirtualQueryEx(process, reinterpret_cast<LPCVOID>(address), &info,
-                                              sizeof(info));
+    {
+        MEMORY_BASIC_INFORMATION info{};
+        const SIZE_T queried{VirtualQueryEx(process, reinterpret_cast<LPCVOID>(address), &info,
+                                              sizeof(info))};
         if (queried == 0)
-{
+        {
             address = AlignUp(address + granularity, granularity);
             continue;
         }
 
-        const std::uint64_t regionBase = reinterpret_cast<std::uint64_t>(info.BaseAddress);
-        const std::uint64_t regionEnd = regionBase + info.RegionSize;
-        const std::uint64_t nextAddress = regionEnd > address ? regionEnd : address + granularity;
+        const std::uint64_t regionBase{reinterpret_cast<std::uint64_t>(info.BaseAddress)};
+        const std::uint64_t regionEnd{regionBase + info.RegionSize};
+        const std::uint64_t nextAddress{regionEnd > address ? regionEnd : address + granularity};
 
         if (info.State == MEM_FREE)
-{
-            const std::uint64_t freeBegin = std::max(regionBase, lower);
-            const std::uint64_t freeEnd = std::min(regionEnd, upper);
-            std::uint64_t candidate = AlignUp(freeBegin, granularity);
+        {
+            const std::uint64_t freeBegin{std::max(regionBase, lower)};
+            const std::uint64_t freeEnd{std::min(regionEnd, upper)};
+            std::uint64_t candidate{AlignUp(freeBegin, granularity)};
             while (candidate < freeEnd && alignedSize <= freeEnd - candidate)
-{
+        {
                 if (FitsRel32(nearAddress + kNearPatchBytes, candidate))
-{
-                    void* memory = VirtualAllocEx(process, reinterpret_cast<LPVOID>(candidate),
+                {
+                    void* memory{VirtualAllocEx(process, reinterpret_cast<LPVOID>(candidate),
                                                   static_cast<SIZE_T>(alignedSize),
                                                   MEM_RESERVE | MEM_COMMIT,
-                                                  PAGE_EXECUTE_READWRITE);
+                                                  PAGE_EXECUTE_READWRITE)};
                     if (memory != nullptr)
-{
+                    {
                         return reinterpret_cast<std::uint64_t>(memory);
                     }
                 }
@@ -1102,8 +1229,8 @@ std::uint64_t AllocateNear(HANDLE process, std::uint64_t nearAddress, std::size_
 
 std::uint64_t AllocateAnywhere(HANDLE process, std::size_t size)
 {
-    void* memory = VirtualAllocEx(process, nullptr, static_cast<SIZE_T>(size),
-                                  MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE);
+    void* memory{VirtualAllocEx(process, nullptr, static_cast<SIZE_T>(size),
+                                  MEM_RESERVE | MEM_COMMIT, PAGE_EXECUTE_READWRITE)};
     return reinterpret_cast<std::uint64_t>(memory);
 }
 
@@ -1114,19 +1241,18 @@ bool AllocatePatchBlock(HANDLE process,
                         bool requireNear,
                         PatchAllocation& allocation)
 {
-    for (std::size_t siteCapacity = requestedSites; siteCapacity != 0;)
-{
-        const std::size_t stubCapacity =
-            static_cast<std::size_t>(AlignUp(siteCapacity * kStubStride, pageSize));
-        const std::size_t counterCapacity = static_cast<std::size_t>(
-            AlignUp(siteCapacity * sizeof(std::uint64_t), pageSize));
-        const std::size_t allocationSize = stubCapacity + counterCapacity;
+    for (std::size_t siteCapacity{requestedSites}; siteCapacity != 0;)
+    {
+        const std::size_t stubCapacity{static_cast<std::size_t>(AlignUp(siteCapacity * kStubStride, pageSize))};
+        const std::size_t counterCapacity{static_cast<std::size_t>(
+            AlignUp(siteCapacity * sizeof(std::uint64_t), pageSize))};
+        const std::size_t allocationSize{stubCapacity + counterCapacity};
 
-        const std::uint64_t base = requireNear ?
+        const std::uint64_t base{requireNear ?
             AllocateNear(process, nearAddress, allocationSize) :
-            AllocateAnywhere(process, allocationSize);
+            AllocateAnywhere(process, allocationSize)};
         if (base != 0)
-{
+        {
             allocation.base = base;
             allocation.stubBase = base;
             allocation.stubCapacity = stubCapacity;
@@ -1137,7 +1263,7 @@ bool AllocatePatchBlock(HANDLE process,
         }
 
         if (siteCapacity == 1)
-{
+        {
             break;
         }
         siteCapacity /= 2;
@@ -1155,17 +1281,17 @@ bool BuildStub(const PatchSite& site, bool atomicCounters, std::vector<std::uint
 
     AppendU8(stub, 0x9C); // pushfq
 
-    const std::uint64_t incStart = site.stubAddress + stub.size();
-    const std::size_t incLength = atomicCounters ? 7u : 6u;
-    const std::uint64_t incNext = incStart + incLength;
+    const std::uint64_t incStart{site.stubAddress + stub.size()};
+    const std::size_t incLength{atomicCounters ? 7u : 6u};
+    const std::uint64_t incNext{incStart + incLength};
     if (!FitsRel32(incNext, site.counterAddress))
-{
+    {
         error = "counter is outside RIP-relative range";
         return false;
     }
 
     if (atomicCounters)
-{
+    {
         AppendU8(stub, 0xF0); // lock
     }
     AppendU8(stub, 0xFF);
@@ -1176,21 +1302,21 @@ bool BuildStub(const PatchSite& site, bool atomicCounters, std::vector<std::uint
 
     stub.insert(stub.end(), site.stolen.begin(), site.stolen.begin() + site.stolenLength);
 
-    const std::uint64_t jumpBackStart = site.stubAddress + stub.size();
-    const std::uint64_t jumpBackNext = jumpBackStart + kNearPatchBytes;
-    const std::uint64_t jumpBackTarget =
-        site.remoteAddress + site.patchOffset + site.stolenLength;
+    const std::uint64_t jumpBackStart{site.stubAddress + stub.size()};
+    const std::uint64_t jumpBackNext{jumpBackStart + kNearPatchBytes};
+    const std::uint64_t jumpBackTarget{site.remoteAddress + site.patchOffset + site.stolenLength};
     if (FitsRel32(jumpBackNext, jumpBackTarget))
-{
+    {
         AppendU8(stub, 0xE9);
         AppendI32(stub, Rel32(jumpBackNext, jumpBackTarget));
-    } else
-{
+    }
+    else
+    {
         AppendAbsoluteJump(stub, jumpBackTarget);
     }
 
     if (stub.size() > kStubStride)
-{
+    {
         error = "stub exceeded reserved stride";
         return false;
     }
@@ -1206,42 +1332,43 @@ bool BuildEntryPatch(const PatchSite& site,
     patch.fill(0x90);
     patchSize = site.stolenLength;
     if (patchSize == 0 || patchSize > patch.size())
-{
+    {
         error = "invalid patch size";
         return false;
     }
 
     if (site.useAbsolutePatch)
-{
+    {
         if (site.stolenLength < kAbsolutePatchBytes)
-{
+        {
             error = "absolute patch window is too small";
             return false;
         }
 
         patch[0] = 0xFF;
         patch[1] = 0x25;
-        const std::int32_t displacement = 0;
+        const std::int32_t displacement{0};
         std::memcpy(patch.data() + 2, &displacement, sizeof(displacement));
         std::memcpy(patch.data() + 6, &site.stubAddress, sizeof(site.stubAddress));
-    } else
-{
+    }
+    else
+    {
         if (site.stolenLength < kNearPatchBytes)
-{
+        {
             error = "near patch window is too small";
             return false;
         }
 
-        const std::uint64_t patchAddress = site.remoteAddress + site.patchOffset;
-        const std::uint64_t patchNext = patchAddress + kNearPatchBytes;
+        const std::uint64_t patchAddress{site.remoteAddress + site.patchOffset};
+        const std::uint64_t patchNext{patchAddress + kNearPatchBytes};
         if (!FitsRel32(patchNext, site.stubAddress))
-{
+        {
             error = "stub is outside entry-point rel32 range";
             return false;
         }
 
         patch[0] = 0xE9;
-        const std::int32_t relative = Rel32(patchNext, site.stubAddress);
+        const std::int32_t relative{Rel32(patchNext, site.stubAddress)};
         std::memcpy(patch.data() + 1, &relative, sizeof(relative));
     }
 
@@ -1250,14 +1377,14 @@ bool BuildEntryPatch(const PatchSite& site,
 
 bool PatchEntryPoint(HANDLE process, const PatchSite& site, std::string& error)
 {
-    std::array<std::uint8_t, kMaxCopiedBytes> patch = {};
-    std::size_t patchSize = 0;
+    std::array<std::uint8_t, kMaxCopiedBytes> patch{};
+    std::size_t patchSize{0};
     if (!BuildEntryPatch(site, patch, patchSize, error))
-{
+    {
         return false;
     }
 
-    const std::uint64_t patchAddress = site.remoteAddress + site.patchOffset;
+    const std::uint64_t patchAddress{site.remoteAddress + site.patchOffset};
     return WriteRemote(process, patchAddress, patch.data(), patchSize, error);
 }
 
@@ -1283,15 +1410,15 @@ bool ProtectExecutableSections(HANDLE process,
 {
     regions.clear();
     for (const auto& section : image.sections)
-{
+    {
         if ((section.characteristics & IMAGE_SCN_MEM_EXECUTE) == 0)
-{
+        {
             continue;
         }
 
-        const std::uint32_t size = std::max(section.virtualSize, section.rawSize);
+        const std::uint32_t size{std::max(section.virtualSize, section.rawSize)};
         if (size == 0)
-{
+        {
             continue;
         }
 
@@ -1314,9 +1441,9 @@ bool ProtectExecutableSections(HANDLE process,
 
 void RestoreProtectedRegions(HANDLE process, const std::vector<ProtectedRegion>& regions)
 {
-    for (auto it = regions.rbegin(); it != regions.rend(); ++it)
-{
-        DWORD ignored = 0;
+    for (auto it{regions.rbegin()}; it != regions.rend(); ++it)
+    {
+        DWORD ignored{0};
         VirtualProtectEx(process, reinterpret_cast<LPVOID>(it->address), it->size,
                          it->oldProtect, &ignored);
     }
@@ -1327,7 +1454,7 @@ void PatchEntryPointsQueued(HANDLE process, std::vector<PatchSite*>& sites, bool
     std::vector<PatchSite*> workSites;
     workSites.reserve(sites.size());
 
-    std::uint64_t previousEnd = 0;
+    std::uint64_t previousEnd{0};
     for (PatchSite* site : sites)
     {
         if (site == nullptr || !site->patchable)
@@ -1335,8 +1462,8 @@ void PatchEntryPointsQueued(HANDLE process, std::vector<PatchSite*>& sites, bool
             continue;
         }
 
-        const std::uint64_t patchBegin = site->remoteAddress + site->patchOffset;
-        const std::uint64_t patchEnd = patchBegin + site->stolenLength;
+        const std::uint64_t patchBegin{site->remoteAddress + site->patchOffset};
+        const std::uint64_t patchEnd{patchBegin + site->stolenLength};
         if (patchBegin < previousEnd)
         {
             site->patchable = false;
@@ -1347,25 +1474,26 @@ void PatchEntryPointsQueued(HANDLE process, std::vector<PatchSite*>& sites, bool
         workSites.push_back(site);
     }
 
-    const std::size_t taskCount = (workSites.size() + kHookPatchTaskSize - 1) / kHookPatchTaskSize;
+    const std::size_t taskCount{(workSites.size() + kHookPatchTaskSize - 1) / kHookPatchTaskSize};
     if (taskCount == 0)
     {
         LogStdout(verbose, "miri: patch queue empty; no hook tasks to run");
         return;
     }
 
-    const std::size_t workerCount = WorkerCountFor(workSites.size(), kHookPatchTaskSize);
-    std::atomic<std::size_t> nextTask = 0;
+    const std::size_t workerCount{WorkerCountFor(workSites.size(), kHookPatchTaskSize)};
+    std::atomic<std::size_t> nextTask{0};
     std::mutex logMutex;
 
-    auto logLine = [&](const std::string& line) {
+    auto logLine{[&](const std::string& line)
+    {
         if (!verbose)
         {
             return;
         }
         std::lock_guard<std::mutex> lock(logMutex);
         std::cout << line << std::endl;
-    };
+    }};
 
     {
         std::ostringstream line;
@@ -1375,11 +1503,12 @@ void PatchEntryPointsQueued(HANDLE process, std::vector<PatchSite*>& sites, bool
         logLine(line.str());
     }
 
-    auto runWorker = [&](std::size_t workerIndex) {
-        std::size_t completedTasks = 0;
-        std::size_t attemptedHooks = 0;
-        std::size_t patchedHooks = 0;
-        std::size_t failedHooks = 0;
+    auto runWorker{[&](std::size_t workerIndex)
+    {
+        std::size_t completedTasks{0};
+        std::size_t attemptedHooks{0};
+        std::size_t patchedHooks{0};
+        std::size_t failedHooks{0};
 
         {
             std::ostringstream line;
@@ -1390,14 +1519,14 @@ void PatchEntryPointsQueued(HANDLE process, std::vector<PatchSite*>& sites, bool
 
         for (;;)
         {
-            const std::size_t task = nextTask.fetch_add(1, std::memory_order_relaxed);
+            const std::size_t task{nextTask.fetch_add(1, std::memory_order_relaxed)};
             if (task >= taskCount)
             {
                 break;
             }
 
-            const std::size_t begin = task * kHookPatchTaskSize;
-            const std::size_t end = std::min(workSites.size(), begin + kHookPatchTaskSize);
+            const std::size_t begin{task * kHookPatchTaskSize};
+            const std::size_t end{std::min(workSites.size(), begin + kHookPatchTaskSize)};
             {
                 std::ostringstream line;
                 line << "miri: patch worker " << workerIndex << " starting task "
@@ -1406,11 +1535,11 @@ void PatchEntryPointsQueued(HANDLE process, std::vector<PatchSite*>& sites, bool
                 logLine(line.str());
             }
 
-            std::size_t taskPatched = 0;
-            std::size_t taskFailed = 0;
-            for (std::size_t index = begin; index < end; ++index)
+            std::size_t taskPatched{0};
+            std::size_t taskFailed{0};
+            for (std::size_t index{begin}; index < end; ++index)
             {
-                PatchSite& site = *workSites[index];
+                PatchSite& site{*workSites[index]};
                 std::string patchError;
                 if (!PatchEntryPoint(process, site, patchError))
                 {
@@ -1444,17 +1573,17 @@ void PatchEntryPointsQueued(HANDLE process, std::vector<PatchSite*>& sites, bool
                  << " hooks, patched " << patchedHooks << ", failed " << failedHooks;
             logLine(line.str());
         }
-    };
+    }};
 
     std::vector<std::future<void>> workers;
     workers.reserve(workerCount);
-    for (std::size_t worker = 0; worker < workerCount; ++worker)
-{
+    for (std::size_t worker{0}; worker < workerCount; ++worker)
+    {
         workers.push_back(std::async(std::launch::async, runWorker, worker));
     }
 
     for (auto& worker : workers)
-{
+    {
         worker.get();
     }
 
@@ -1464,7 +1593,7 @@ void PatchEntryPointsQueued(HANDLE process, std::vector<PatchSite*>& sites, bool
 void AddRecordsForSite(const PatchSite& site, InstrumentationResult& result)
 {
     for (const auto& symbol : site.symbols)
-{
+    {
         PatchResult record;
         record.function = symbol;
         record.patched = site.patchable && site.status == "patched";
@@ -1491,21 +1620,20 @@ bool InstrumentProcess(HANDLE process,
 {
     result = {};
 
-    const bool verbose = options.verbose;
-    std::vector<PatchSite> sites =
-        BuildSites(process, remoteImageBase, image, functions, verbose, error);
+    const bool verbose{options.verbose};
+    std::vector<PatchSite> sites{BuildSites(process, remoteImageBase, image, functions, verbose, error)};
     LogStdout(verbose, "miri: collecting patchable sites");
     std::vector<PatchSite*> patchable;
     patchable.reserve(sites.size());
 
     for (auto& site : sites)
-{
+    {
         if (!site.patchable)
-{
+        {
             continue;
         }
         if (options.maxFunctions != 0 && patchable.size() >= options.maxFunctions)
-{
+        {
             site.patchable = false;
             site.status = "skipped: maxFunctions reached";
             continue;
@@ -1520,18 +1648,19 @@ bool InstrumentProcess(HANDLE process,
     }
 
     if (!patchable.empty())
-{
-        SYSTEM_INFO systemInfo = {};
+    {
+        SYSTEM_INFO systemInfo{};
         GetSystemInfo(&systemInfo);
-        const std::size_t pageSize = systemInfo.dwPageSize;
+        const std::size_t pageSize{systemInfo.dwPageSize};
         result.counterCount = patchable.size();
 
         std::vector<ProtectedRegion> protectedRegions;
         LogStdout(verbose, "miri: making executable sections writable");
         if (!ProtectExecutableSections(process, remoteImageBase, image, protectedRegions, error))
-{
+        {
             return false;
         }
+
         {
             std::ostringstream line;
             line << "miri: made " << protectedRegions.size()
@@ -1542,16 +1671,15 @@ bool InstrumentProcess(HANDLE process,
         std::vector<PatchSite*> readyPatchSites;
         readyPatchSites.reserve(patchable.size());
 
-        std::size_t nextSite = 0;
-        std::size_t nextCounterIndex = 0;
-        std::size_t allocationBlock = 0;
+        std::size_t nextSite{0};
+        std::size_t nextCounterIndex{0};
+        std::size_t allocationBlock{0};
         while (nextSite < patchable.size())
-{
+        {
             ++allocationBlock;
-            const std::size_t blockStart = nextSite;
-            const std::size_t remaining = patchable.size() - nextSite;
-            const std::size_t requestedSites =
-                std::min(remaining, kDefaultPatchSitesPerAllocation);
+            const std::size_t blockStart{nextSite};
+            const std::size_t remaining{patchable.size() - nextSite};
+            const std::size_t requestedSites{std::min(remaining, kDefaultPatchSitesPerAllocation)};
 
             {
                 std::ostringstream line;
@@ -1562,18 +1690,19 @@ bool InstrumentProcess(HANDLE process,
             }
 
             PatchAllocation allocation;
-            bool useAbsolutePatch = false;
+            bool useAbsolutePatch{false};
             std::vector<PatchSite*> blockSites;
             blockSites.reserve(requestedSites);
 
             if (AllocatePatchBlock(process, patchable[blockStart]->remoteAddress, requestedSites,
                                    pageSize, true, allocation)) {
-                for (std::size_t index = 0; index < allocation.siteCapacity; ++index)
+                for (std::size_t index{0}; index < allocation.siteCapacity; ++index)
                 {
                     blockSites.push_back(patchable[blockStart + index]);
                 }
                 nextSite += allocation.siteCapacity;
-            } else
+            }
+            else
             {
                 {
                     std::ostringstream line;
@@ -1582,10 +1711,10 @@ bool InstrumentProcess(HANDLE process,
                     LogStdout(verbose, line.str());
                 }
 
-                std::size_t skippedSites = 0;
-                for (std::size_t index = 0; index < requestedSites; ++index)
+                std::size_t skippedSites{0};
+                for (std::size_t index{0}; index < requestedSites; ++index)
                 {
-                    PatchSite* site = patchable[blockStart + index];
+                    PatchSite* site{patchable[blockStart + index]};
                     if (site->absolutePatchable)
                     {
                         blockSites.push_back(site);
@@ -1631,7 +1760,7 @@ bool InstrumentProcess(HANDLE process,
 
                 if (allocation.siteCapacity < blockSites.size())
                 {
-                    for (std::size_t index = allocation.siteCapacity; index < blockSites.size();
+                    for (std::size_t index{allocation.siteCapacity}; index < blockSites.size();
                          ++index)
                     {
                         blockSites[index]->patchable = false;
@@ -1647,7 +1776,7 @@ bool InstrumentProcess(HANDLE process,
                 continue;
             }
 
-            const std::size_t blockSiteCount = blockSites.size();
+            const std::size_t blockSiteCount{blockSites.size()};
             {
                 std::ostringstream line;
                 line << "miri: allocation block " << allocationBlock << " reserved "
@@ -1680,9 +1809,9 @@ bool InstrumentProcess(HANDLE process,
             }
 
             std::vector<std::uint8_t> stubBytes(blockSiteCount * kStubStride, 0);
-            for (std::size_t index = 0; index < blockSiteCount; ++index)
+            for (std::size_t index{0}; index < blockSiteCount; ++index)
             {
-                PatchSite& site = *blockSites[index];
+                PatchSite& site{*blockSites[index]};
                 site.stubAddress = allocation.stubBase + index * kStubStride;
                 site.counterAddress = allocation.counterBase + index * sizeof(std::uint64_t);
                 site.counterIndex = static_cast<std::uint32_t>(nextCounterIndex + index);
@@ -1690,7 +1819,7 @@ bool InstrumentProcess(HANDLE process,
                 site.stolenLength =
                     useAbsolutePatch ? site.absoluteStolenLength : site.nearStolenLength;
 
-                const std::uint64_t patchAddress = site.remoteAddress + site.patchOffset;
+                const std::uint64_t patchAddress{site.remoteAddress + site.patchOffset};
                 if (!site.useAbsolutePatch &&
                     !FitsRel32(patchAddress + kNearPatchBytes, site.stubAddress)) {
                     if (!site.absolutePatchable)
@@ -1744,7 +1873,7 @@ bool InstrumentProcess(HANDLE process,
                 continue;
             }
 
-            DWORD oldProtect = 0;
+            DWORD oldProtect{0};
             {
                 std::ostringstream line;
                 line << "miri: finalizing trampoline/counter protections for block "
@@ -1802,9 +1931,9 @@ bool InstrumentProcess(HANDLE process,
     std::sort(result.records.begin(), result.records.end(),
               [](const PatchResult& left, const PatchResult& right) {
                   if (left.function.rva != right.function.rva)
-    {
+                    {
                       return left.function.rva < right.function.rva;
-                  }
+                    }
                   return left.function.name < right.function.name;
               });
 

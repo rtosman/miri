@@ -14,7 +14,7 @@ struct SymbolFilters
 {
     std::vector<std::wstring> includePatterns;
     std::vector<std::wstring> excludePatterns;
-    std::size_t maxFunctions = 0;
+    std::size_t maxFunctions{0};
 };
 
 bool EnumeratePdbFunctions(const std::filesystem::path& exePath,

@@ -17,15 +17,15 @@ struct Options
 {
     std::filesystem::path reportPath;
     std::filesystem::path htmlPath;
-    std::size_t top = 50;
-    bool includeZero = false;
+    std::size_t top{50};
+    bool includeZero{false};
 };
 
 struct Row
 {
     std::string symbol;
     std::string rva;
-    std::uint64_t count = 0;
+    std::uint64_t count{0};
     std::string status;
 };
 
@@ -38,36 +38,42 @@ std::vector<std::string> ParseCsvLine(std::string_view line)
 {
     std::vector<std::string> fields;
     std::string field;
-    bool inQuotes = false;
+    bool inQuotes{false};
 
-    for (std::size_t i = 0; i < line.size(); ++i)
-{
-        const char ch = line[i];
+    for (std::size_t i{0}; i < line.size(); ++i)
+    {
+        const char ch{line[i]};
         if (inQuotes)
-{
+        {
             if (ch == '"' && i + 1 < line.size() && line[i + 1] == '"')
-{
+            {
                 field.push_back('"');
                 ++i;
-            } else if (ch == '"')
-{
+            } 
+            else 
+            if (ch == '"')
+            {
                 inQuotes = false;
-            } else
-{
+            } 
+            else
+            {
                 field.push_back(ch);
             }
             continue;
         }
 
         if (ch == '"')
-{
+        {
             inQuotes = true;
-        } else if (ch == ',')
-{
+        } 
+        else 
+        if (ch == ',')
+        {
             fields.push_back(std::move(field));
             field.clear();
-        } else
-{
+        } 
+        else
+        {
             field.push_back(ch);
         }
     }
@@ -85,26 +91,32 @@ bool ParseOptions(int argc, wchar_t** argv, Options& options)
 
     options.reportPath = std::filesystem::absolute(argv[1]);
 
-    for (int i = 2; i < argc; ++i)
-{
-        const std::wstring arg = argv[i];
+    for (int i{2}; i < argc; ++i)
+    {
+        const std::wstring arg{argv[i]};
         if (arg == L"--include-zero")
-{
+        {
             options.includeZero = true;
-        } else if (arg == L"--top" && i + 1 < argc)
-{
+        } 
+        else 
+        if (arg == L"--top" && i + 1 < argc)
+        {
             try
-{
+            {
                 options.top = static_cast<std::size_t>(std::stoull(argv[++i]));
-            } catch (...)
-{
+            } 
+            catch (...)
+            {
                 return false;
             }
-        } else if (arg == L"--html" && i + 1 < argc)
-{
+        } 
+        else 
+        if (arg == L"--html" && i + 1 < argc)
+        {
             options.htmlPath = std::filesystem::absolute(argv[++i]);
-        } else
-{
+        } 
+        else
+        {
             return false;
         }
     }
@@ -116,50 +128,53 @@ bool LoadRows(const std::filesystem::path& reportPath, std::vector<Row>& rows, s
 {
     std::ifstream input(reportPath, std::ios::binary);
     if (!input)
-{
+    {
         error = "failed to open report: " + miri::WideToUtf8(reportPath.wstring());
         return false;
     }
 
     std::string line;
     if (!std::getline(input, line))
-{
+    {
         error = "report is empty";
         return false;
     }
 
-    const auto header = ParseCsvLine(line);
+    const auto header{ParseCsvLine(line)};
     std::map<std::string, std::size_t> columns;
-    for (std::size_t index = 0; index < header.size(); ++index)
-{
+    for (std::size_t index{0}; index < header.size(); ++index)
+    {
         columns[header[index]] = index;
     }
 
-    const auto findColumn = [&columns](const std::string& name) -> std::size_t {
-        const auto it = columns.find(name);
-        return it == columns.end() ? SIZE_MAX : it->second;
-    };
+    const auto findColumn{[&columns](const std::string& name) -> std::size_t 
+        {
+            const auto it{columns.find(name)};
+            return it == columns.end() ? SIZE_MAX : it->second;
+        }};
 
-    const std::size_t symbolColumn = findColumn("symbol");
-    const std::size_t rvaColumn = findColumn("rva");
-    const std::size_t countColumn = findColumn("count");
-    const std::size_t statusColumn = findColumn("status");
+    const std::size_t symbolColumn{findColumn("symbol")};
+    const std::size_t rvaColumn{findColumn("rva")};
+    const std::size_t countColumn{findColumn("count")};
+    const std::size_t statusColumn{findColumn("status")};
     if (symbolColumn == SIZE_MAX || rvaColumn == SIZE_MAX || countColumn == SIZE_MAX ||
-        statusColumn == SIZE_MAX) {
+        statusColumn == SIZE_MAX) 
+    {
         error = "report is missing one or more required columns";
         return false;
     }
 
     while (std::getline(input, line))
-{
+    {
         if (!line.empty() && line.back() == '\r')
-{
+        {
             line.pop_back();
         }
 
-        const auto fields = ParseCsvLine(line);
+        const auto fields{ParseCsvLine(line)};
         if (fields.size() <= std::max(
-{symbolColumn, rvaColumn, countColumn, statusColumn})) {
+            {symbolColumn, rvaColumn, countColumn, statusColumn})) 
+        {
             continue;
         }
 
@@ -168,10 +183,11 @@ bool LoadRows(const std::filesystem::path& reportPath, std::vector<Row>& rows, s
         row.rva = fields[rvaColumn];
         row.status = fields[statusColumn];
         try
-{
+        {
             row.count = std::stoull(fields[countColumn]);
-        } catch (...)
-{
+        } 
+        catch (...)
+        {
             row.count = 0;
         }
         rows.push_back(std::move(row));
@@ -216,17 +232,17 @@ void PrintHistogram(const std::vector<Row>& rows)
         return;
     }
 
-    const std::uint64_t maxCount = rows.front().count;
-    constexpr std::size_t barWidth = 56;
+    const std::uint64_t maxCount{rows.front().count};
+    constexpr std::size_t barWidth{56};
 
     for (const auto& row : rows)
 {
-        const std::size_t width = maxCount == 0
+        const std::size_t width{maxCount == 0
                                       ? 0
                                       : static_cast<std::size_t>(
-                                            (row.count * barWidth + maxCount - 1) / maxCount);
+                                            (row.count * barWidth + maxCount - 1) / maxCount)};
         std::cout << std::setw(12) << row.count << " | ";
-        for (std::size_t i = 0; i < width; ++i)
+        for (std::size_t i{0}; i < width; ++i)
 {
             std::cout << '#';
         }
@@ -244,7 +260,7 @@ bool WriteHtml(const std::filesystem::path& htmlPath, const std::vector<Row>& ro
         return false;
     }
 
-    const std::uint64_t maxCount = rows.empty() ? 0 : rows.front().count;
+    const std::uint64_t maxCount{rows.empty() ? 0 : rows.front().count};
 
     output << "<!doctype html>\n<html lang=\"en\">\n<head>\n"
            << "<meta charset=\"utf-8\">\n"
@@ -262,8 +278,8 @@ bool WriteHtml(const std::filesystem::path& htmlPath, const std::vector<Row>& ro
 
     for (const auto& row : rows)
 {
-        const double percent = maxCount == 0 ? 0.0 : (100.0 * static_cast<double>(row.count)) /
-                                                   static_cast<double>(maxCount);
+        const double percent{maxCount == 0 ? 0.0 : (100.0 * static_cast<double>(row.count)) /
+                                                   static_cast<double>(maxCount)};
         output << "<div class=\"row\"><div class=\"count\">" << row.count
                << "</div><div class=\"bar\"><div class=\"fill\" style=\"width:"
                << std::fixed << std::setprecision(2) << percent
@@ -296,7 +312,7 @@ int wmain(int argc, wchar_t** argv)
         return 2;
     }
 
-    const std::vector<Row> selected = SelectRows(std::move(rows), options);
+    const std::vector<Row> selected{SelectRows(std::move(rows), options)};
     PrintHistogram(selected);
 
     if (!options.htmlPath.empty())
