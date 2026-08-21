@@ -1,5 +1,43 @@
 local buildRoot = os.getenv("MIRI_BUILD_ROOT") or "E:/miri-build"
 
+local function normalizePath(pathValue)
+    if pathValue == nil or pathValue == "" then
+        return nil
+    end
+
+    pathValue = path.translate(pathValue, "/")
+    while pathValue:sub(-1) == "/" do
+        pathValue = pathValue:sub(1, -2)
+    end
+    return pathValue
+end
+
+local function firstExistingDirectory(candidates)
+    for _, candidate in ipairs(candidates) do
+        candidate = normalizePath(candidate)
+        if candidate ~= nil and os.isdir(candidate) then
+            return candidate
+        end
+    end
+
+    return nil
+end
+
+local vsInstallDir = normalizePath(os.getenv("VSINSTALLDIR"))
+local diaSdkRoot = normalizePath(os.getenv("MIRI_DIA_SDK_DIR"))
+if diaSdkRoot == nil and vsInstallDir ~= nil then
+    diaSdkRoot = firstExistingDirectory({ vsInstallDir .. "/DIA SDK" })
+end
+if diaSdkRoot == nil then
+    diaSdkRoot = firstExistingDirectory({
+        "E:/Program Files/Microsoft Visual Studio/18/Community/DIA SDK",
+        "E:/Program Files/Microsoft Visual Studio/2022/Community/DIA SDK",
+        "C:/Program Files/Microsoft Visual Studio/2022/Community/DIA SDK",
+        "C:/Program Files/Microsoft Visual Studio/2022/Professional/DIA SDK",
+        "C:/Program Files/Microsoft Visual Studio/2022/Enterprise/DIA SDK"
+    })
+end
+
 workspace "miri"
     architecture "x86_64"
     configurations { "Debug", "Release" }
@@ -42,6 +80,10 @@ project "miri_common"
     }
 
     includedirs { "src" }
+    if diaSdkRoot ~= nil then
+        includedirs { diaSdkRoot .. "/include" }
+        defines { "MIRI_HAS_DIA=1" }
+    end
 
 project "miri-run"
     kind "ConsoleApp"
@@ -57,6 +99,10 @@ project "miri-run"
 
     includedirs { "src" }
     links { "miri_common", "Dbghelp" }
+    if diaSdkRoot ~= nil then
+        libdirs { diaSdkRoot .. "/lib/amd64" }
+        links { "diaguids" }
+    end
 
 project "miri-hist"
     kind "ConsoleApp"

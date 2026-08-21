@@ -17,11 +17,25 @@ struct SymbolFilters
     std::size_t maxFunctions{0};
 };
 
+struct SymbolEnumerationReport
+{
+    bool diaCompiled{false};
+    bool diaLoaded{false};
+    std::size_t dbghelpPublicNames{0};
+    std::size_t dbghelpDecoratedPublicNames{0};
+    std::size_t diaPublicNames{0};
+    std::size_t diaDecoratedPublicNames{0};
+    std::size_t publicNameMatches{0};
+    std::size_t finalDecoratedNames{0};
+};
+
 bool EnumeratePdbFunctions(const std::filesystem::path& exePath,
                            const std::filesystem::path& pdbPath,
                            const PeImageInfo& image,
                            const SymbolFilters& filters,
+                           bool collectMangledNames,
                            std::vector<FunctionSymbol>& symbols,
+                           SymbolEnumerationReport& report,
                            std::string& error);
 
 } // namespace miri

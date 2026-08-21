@@ -104,6 +104,7 @@ struct CommandLineOptions
 {
     bool attach{false};
     bool verbose{false};
+    bool includeMangled{false};
     DWORD pid{0};
     std::filesystem::path exePath;
     std::filesystem::path pdbPath;
@@ -113,9 +114,9 @@ struct CommandLineOptions
 void PrintUsage()
 {
     std::wcerr << L"usage:\n"
-               << L"  miri-run [-v|--verbose] <target.exe> <target.pdb> [config.json]\n"
-               << L"  miri-run [-v|--verbose] --pid <pid> [target.pdb] [config.json]\n"
-               << L"  miri-run [-v|--verbose] --attach <pid> [target.pdb] [config.json]\n";
+               << L"  miri-run [-v|--verbose] [--mangled] <target.exe> <target.pdb> [config.json]\n"
+               << L"  miri-run [-v|--verbose] [--mangled] --pid <pid> [target.pdb] [config.json]\n"
+               << L"  miri-run [-v|--verbose] [--mangled] --attach <pid> [target.pdb] [config.json]\n";
 }
 
 std::filesystem::path AbsolutePath(const std::filesystem::path& path)
@@ -149,6 +150,11 @@ bool IsJsonPath(const std::filesystem::path& path)
 bool IsVerboseSwitch(std::wstring_view argument)
 {
     return argument == L"-v" || argument == L"--verbose";
+}
+
+bool IsMangledSwitch(std::wstring_view argument)
+{
+    return argument == L"--mangled";
 }
 
 std::filesystem::path DefaultPdbPath(const std::filesystem::path& exePath)
@@ -188,6 +194,11 @@ bool ParseCommandLine(int argc, wchar_t** argv, CommandLineOptions& options)
         if (IsVerboseSwitch(argv[index]))
         {
             options.verbose = true;
+            continue;
+        }
+        if (IsMangledSwitch(argv[index]))
+        {
+            options.includeMangled = true;
             continue;
         }
         arguments.push_back(argv[index]);
@@ -1115,6 +1126,7 @@ bool PrintExitEventStack(const DEBUG_EVENT& event,
 bool WriteCsvReport(const std::filesystem::path& outputPath,
                     const miri::InstrumentationResult& instrumentation,
                     const std::vector<std::uint64_t>& counters,
+                    bool includeMangled,
                     std::string& error)
 {
     std::ofstream output(outputPath, std::ios::binary);
@@ -1124,7 +1136,12 @@ bool WriteCsvReport(const std::filesystem::path& outputPath,
         return false;
     }
 
-    output << "symbol,rva,remote_address,counter_index,count,status,stolen_bytes\n";
+    output << "symbol,";
+    if (includeMangled)
+    {
+        output << "mangled,";
+    }
+    output << "rva,remote_address,counter_index,count,status,stolen_bytes\n";
     for (const auto& record : instrumentation.records)
     {
         std::uint64_t count{0};
@@ -1133,8 +1150,12 @@ bool WriteCsvReport(const std::filesystem::path& outputPath,
             count = counters[record.counterIndex];
         }
 
-        output << miri::CsvEscape(miri::WideToUtf8(record.function.name)) << ','
-               << miri::Hex64(record.function.rva) << ','
+        output << miri::CsvEscape(miri::WideToUtf8(record.function.name)) << ',';
+        if (includeMangled)
+        {
+            output << miri::CsvEscape(miri::WideToUtf8(record.function.mangledName)) << ',';
+        }
+        output << miri::Hex64(record.function.rva) << ','
                << miri::Hex64(record.remoteAddress) << ',';
         if (record.patched)
         {
@@ -1191,7 +1212,8 @@ bool LaunchAndProfile(const std::filesystem::path& exePath,
                       const PeImageInfo& image,
                       const std::vector<FunctionSymbol>& symbols,
                       const PatchOptions& patchOptions,
-                      const std::filesystem::path& outputPath)
+                      const std::filesystem::path& outputPath,
+                      bool includeMangled)
 {
     ProcessHandles child;
     STARTUPINFOW startup{};
@@ -1333,7 +1355,8 @@ bool LaunchAndProfile(const std::filesystem::path& exePath,
             }
 
             std::string reportError;
-            if (!WriteCsvReport(outputPath, instrumentation, counters, reportError))
+            if (!WriteCsvReport(outputPath, instrumentation, counters, includeMangled,
+                                reportError))
             {
                 std::cerr << "report write failed: " << reportError << "\n";
             }
@@ -1370,7 +1393,8 @@ bool AttachAndProfile(DWORD pid,
                       const PeImageInfo& image,
                       const std::vector<FunctionSymbol>& symbols,
                       const PatchOptions& patchOptions,
-                      const std::filesystem::path& outputPath)
+                      const std::filesystem::path& outputPath,
+                      bool includeMangled)
 {
     const DWORD processAccess{PROCESS_QUERY_INFORMATION | PROCESS_QUERY_LIMITED_INFORMATION |
                                 PROCESS_VM_OPERATION | PROCESS_VM_READ | PROCESS_VM_WRITE |
@@ -1533,7 +1557,8 @@ bool AttachAndProfile(DWORD pid,
             }
 
             std::string reportError;
-            if (!WriteCsvReport(outputPath, instrumentation, counters, reportError))
+            if (!WriteCsvReport(outputPath, instrumentation, counters, includeMangled,
+                                reportError))
             {
                 std::cerr << "report write failed: " << reportError << "\n";
             }
@@ -1657,8 +1682,11 @@ int wmain(int argc, wchar_t** argv)
     filters.excludePatterns = config.excludePatterns;
 
     std::vector<FunctionSymbol> symbols;
+    miri::SymbolEnumerationReport symbolReport;
     std::string symbolError;
-    if (!miri::EnumeratePdbFunctions(exePath, pdbPath, image, filters, symbols, symbolError))
+    if (!miri::EnumeratePdbFunctions(exePath, pdbPath, image, filters,
+                                     options.includeMangled, symbols, symbolReport,
+                                     symbolError))
     {
         std::cerr << symbolError << "\n";
         return 2;
@@ -1676,12 +1704,24 @@ int wmain(int argc, wchar_t** argv)
     patchOptions.maxFunctions = config.maxFunctions;
 
     std::cerr << "found " << symbols.size() << " function symbols\n";
+    if (options.verbose && options.includeMangled)
+    {
+        std::cerr << "mangled symbol lookup: dbghelp publics "
+                  << symbolReport.dbghelpDecoratedPublicNames << "/"
+                  << symbolReport.dbghelpPublicNames << " decorated, DIA "
+                  << (symbolReport.diaCompiled ? "enabled" : "not built") << "/"
+                  << (symbolReport.diaLoaded ? "loaded" : "not loaded") << ", "
+                  << symbolReport.diaDecoratedPublicNames << "/"
+                  << symbolReport.diaPublicNames << " decorated, matched "
+                  << symbolReport.publicNameMatches << ", final decorated "
+                  << symbolReport.finalDecoratedNames << "/" << symbols.size() << "\n";
+    }
     if (options.attach)
     {
         return AttachAndProfile(options.pid, exePath, pdbPath, image, symbols, patchOptions,
-                                config.outputPath) ? 0 : 1;
+                                config.outputPath, options.includeMangled) ? 0 : 1;
     }
 
     return LaunchAndProfile(exePath, pdbPath, config, image, symbols, patchOptions,
-                            config.outputPath) ? 0 : 1;
+                            config.outputPath, options.includeMangled) ? 0 : 1;
 }

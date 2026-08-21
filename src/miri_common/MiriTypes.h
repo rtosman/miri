@@ -10,6 +10,7 @@ namespace miri
 struct FunctionSymbol
 {
     std::wstring name;
+    std::wstring mangledName;
     std::uint32_t rva{0};
     std::uint32_t size{0};
     std::uint32_t flags{0};
