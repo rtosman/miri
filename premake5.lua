@@ -1,3 +1,6 @@
+-- SPDX-License-Identifier: BSD-3-Clause
+-- Copyright (c) 2026 Rennie Allen
+
 local buildRoot = os.getenv("MIRI_BUILD_ROOT") or "E:/miri-build"
 
 local function normalizePath(pathValue)

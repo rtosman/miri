@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BSD-3-Clause
+// Copyright (c) 2026 Rennie Allen
+
 #pragma once
 
 #include "miri_common/MiriTypes.h"
