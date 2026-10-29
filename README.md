@@ -21,6 +21,8 @@ The repo builds two command line tools:
 
 `miri-run` currently instruments the main executable image, not every loaded DLL.
 
+MIRI stands for Minimally Invasive Runtime Instrumentation
+
 ## Build
 
 By default, generated Visual Studio projects and build output go under
