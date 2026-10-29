@@ -3,6 +3,11 @@
 
 local buildRoot = os.getenv("MIRI_BUILD_ROOT") or "E:/miri-build"
 
+newoption {
+    trigger = "with-tests",
+    description = "Build the patch decoder and trampoline regression tests"
+}
+
 local function normalizePath(pathValue)
     if pathValue == nil or pathValue == "" then
         return nil
@@ -121,3 +126,28 @@ project "miri-hist"
 
     includedirs { "src" }
     links { "miri_common" }
+
+if _OPTIONS["with-tests"] then
+    project "miri-patch-tests"
+        kind "ConsoleApp"
+        language "C++"
+        cppdialect "C++17"
+        targetdir (buildRoot .. "/bin/%{cfg.buildcfg}")
+        objdir (buildRoot .. "/obj/%{prj.name}/%{cfg.buildcfg}")
+        files { "tests/remote_patch_tests.cpp", "src/miri_common/StringUtil.cpp" }
+        includedirs { "src" }
+
+    project "miri-diagnostics-tests"
+        kind "ConsoleApp"
+        language "C++"
+        cppdialect "C++17"
+        targetdir (buildRoot .. "/bin/%{cfg.buildcfg}")
+        objdir (buildRoot .. "/obj/%{prj.name}/%{cfg.buildcfg}")
+        files { "tests/debug_diagnostics_tests.cpp" }
+        includedirs { "src" }
+        links { "miri_common", "Dbghelp" }
+        if diaSdkRoot ~= nil then
+            libdirs { diaSdkRoot .. "/lib/amd64" }
+            links { "diaguids" }
+        end
+end

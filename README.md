@@ -39,6 +39,12 @@ If the DIA SDK is found, the build enables extra decorated-symbol lookup for
 `--mangled`. You can point Premake at a specific DIA SDK with
 `MIRI_DIA_SDK_DIR`.
 
+To build the patch decoder and trampoline regression tests, generate projects
+with `premake5 --with-tests vs2022`, build the solution, and run
+`<MIRI_BUILD_ROOT>\bin\Release\miri-patch-tests.exe`. The tests check SIMD
+instruction boundaries and execute synthetic patched functions in their own
+process with near/absolute entry jumps and both counter modes.
+
 ## miri-run
 
 ### Launch a target
@@ -85,6 +91,13 @@ E:\miri-build\bin\Release\miri-run.exe --pid 1234 C:\work\game.miri.json
 
 `miri-run` remains attached as the debugger until the target exits. During that
 time, tools such as WinDbg cannot also attach invasively.
+
+Before patching, miri reads every stopped target thread's instruction pointer.
+It skips sites where a thread is already inside bytes that could be replaced,
+including the larger absolute-jump fallback window. This prevents an attached
+thread from resuming in jump data or padding. Threads at the start of a patch
+can execute the new jump safely. If a thread context cannot be read, miri stops
+instrumentation before changing target memory.
 
 ### Command line switches
 
@@ -185,6 +198,20 @@ failure to allocate nearby trampoline memory.
 When the target exits, `miri-run` also prints the process exit code. It attempts
 to print a termination callstack when it sees termination APIs or a final
 debugger exit event.
+
+The saved exception report prefers the terminating thread's last exception,
+falling back to the latest exception from another thread. First-chance
+`0x406D1388` thread naming notifications are excluded from this report;
+second-chance exceptions are retained. A saved first-chance exception can have
+been handled, so it is a diagnostic lead rather than proof of the exit cause.
+The exception snapshot also saves registers, instruction bytes, and the nearest
+preceding planned site's status, entry bytes, and trampoline bytes when patched.
+These are captured while the exception debug event has the target stopped,
+before its handlers run. The nearest site is a lookup hint; it does not prove
+that the fault belongs to that function or was caused by instrumentation.
+
+With `--with-tests`, `miri-diagnostics-tests.exe` checks exception retention
+across threads and verifies that stack capture reaches caller frames.
 
 ## miri-hist
 

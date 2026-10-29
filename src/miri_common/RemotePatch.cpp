@@ -16,6 +16,7 @@
 #include <mutex>
 #include <sstream>
 #include <thread>
+#include <tlhelp32.h>
 
 namespace miri
 {
@@ -89,6 +90,82 @@ struct ProtectedRegion
     std::size_t size{0};
     DWORD oldProtect{0};
 };
+
+// The caller must hold a debug event, which keeps every target thread stopped.
+bool CollectStoppedInstructionPointers(HANDLE process, std::vector<std::uint64_t>& addresses,
+                                       std::string& error)
+{
+    addresses.clear();
+    const DWORD pid{GetProcessId(process)};
+    if (pid == 0)
+    {
+        error = "GetProcessId failed: " + LastWin32ErrorMessage();
+        return false;
+    }
+    HANDLE snapshot{CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)};
+    if (snapshot == INVALID_HANDLE_VALUE)
+    {
+        error = "thread snapshot failed: " + LastWin32ErrorMessage();
+        return false;
+    }
+    THREADENTRY32 entry{};
+    entry.dwSize = sizeof(entry);
+    BOOL haveEntry{Thread32First(snapshot, &entry)};
+    while (haveEntry)
+    {
+        if (entry.th32OwnerProcessID == pid)
+        {
+            HANDLE thread{OpenThread(THREAD_GET_CONTEXT, FALSE, entry.th32ThreadID)};
+            CONTEXT context{};
+            context.ContextFlags = CONTEXT_CONTROL;
+            const bool captured{thread != nullptr && GetThreadContext(thread, &context)};
+            if (!captured)
+            {
+                error = "cannot read stopped thread " + std::to_string(entry.th32ThreadID) +
+                        " before patching: " + LastWin32ErrorMessage();
+            }
+            if (thread != nullptr) CloseHandle(thread);
+            if (!captured)
+            {
+                CloseHandle(snapshot);
+                return false;
+            }
+            addresses.push_back(context.Rip);
+        }
+        haveEntry = Thread32Next(snapshot, &entry);
+    }
+    const DWORD enumerationError{GetLastError()};
+    CloseHandle(snapshot);
+    if (enumerationError != ERROR_NO_MORE_FILES || addresses.empty())
+    {
+        error = "could not enumerate all stopped target threads (error " +
+                std::to_string(enumerationError) + ")";
+        return false;
+    }
+    std::sort(addresses.begin(), addresses.end());
+    return true;
+}
+
+void ExcludeActivePatchSites(std::vector<PatchSite>& sites,
+                             const std::vector<std::uint64_t>& sortedInstructionPointers)
+{
+    for (auto& site : sites)
+    {
+        if (!site.patchable) continue;
+        const std::uint64_t begin{site.remoteAddress + site.patchOffset};
+        // Reserve the largest possible window, including absolute fallback.
+        const std::uint64_t length{std::max(site.nearStolenLength,
+                                          site.absoluteStolenLength)};
+        const auto next{std::upper_bound(sortedInstructionPointers.begin(),
+                                         sortedInstructionPointers.end(), begin)};
+        if (next != sortedInstructionPointers.end() && *next - begin < length)
+        {
+            site.patchable = false;
+            site.status = "skipped: stopped thread instruction pointer " + Hex64(*next) +
+                          " is inside patch window";
+        }
+    }
+}
 
 std::uint64_t AlignDown(std::uint64_t value, std::uint64_t alignment)
 {
@@ -452,14 +529,17 @@ DecodedInstruction DecodeX64Instruction(const std::uint8_t* code, std::size_t ma
             case 0xBF:
             case 0xC0:
             case 0xC1:
-            case 0xC2:
             case 0xC3:
-            case 0xC4:
-            case 0xC5:
-            case 0xC6:
             case 0xC7:
                 modRm = true;
                 break;
+            // SIMD compare, insert/extract and shuffle instructions carry an
+            // imm8 after ModRM/SIB/displacement. Omitting it can split the
+            // instruction and consume the trampoline's jump as the immediate.
+            case 0xC2:
+            case 0xC4:
+            case 0xC5:
+            case 0xC6:
             case 0x70:
                 modRm = true;
                 immediate = 1;
@@ -1624,7 +1704,13 @@ bool InstrumentProcess(HANDLE process,
     result = {};
 
     const bool verbose{options.verbose};
+    std::vector<std::uint64_t> stoppedInstructionPointers;
+    if (!CollectStoppedInstructionPointers(process, stoppedInstructionPointers, error))
+    {
+        return false;
+    }
     std::vector<PatchSite> sites{BuildSites(process, remoteImageBase, image, functions, verbose, error)};
+    ExcludeActivePatchSites(sites, stoppedInstructionPointers);
     LogStdout(verbose, "miri: collecting patchable sites");
     std::vector<PatchSite*> patchable;
     patchable.reserve(sites.size());

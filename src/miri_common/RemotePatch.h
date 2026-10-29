@@ -14,6 +14,8 @@
 namespace miri
 {
 
+// Call only while holding a debug event for this process, before ContinueDebugEvent.
+// All target threads must remain stopped throughout planning and patching.
 bool InstrumentProcess(HANDLE process,
                        std::uint64_t remoteImageBase,
                        const PeImageInfo& image,

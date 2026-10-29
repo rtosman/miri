@@ -476,6 +476,7 @@ public:
         }
 
         SymRefreshModuleList(process_);
+        const CONTEXT interruptedContext{context};
 
         STACKFRAME64 frame{};
         frame.AddrPC.Offset = context.Rip;
@@ -487,31 +488,38 @@ public:
 
         constexpr DWORD kMaxFrames{64};
         DWORD printedFrames{0};
-        for (DWORD frameIndex{0}; frameIndex < kMaxFrames; ++frameIndex)
+        captured.lines.push_back("  #0 " + FormatSymbol(context.Rip));
+        printedFrames = 1;
+        for (DWORD walkIndex{0}; printedFrames < kMaxFrames; ++walkIndex)
         {
-            if (frame.AddrPC.Offset == 0)
-            {
-                break;
-            }
-
-            captured.lines.push_back("  #" + std::to_string(frameIndex) + " " +
-                                     FormatSymbol(frame.AddrPC.Offset));
-            printedFrames = frameIndex + 1;
-
             const DWORD64 previousPc{frame.AddrPC.Offset};
+            const DWORD64 previousSp{frame.AddrStack.Offset};
             if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, process_, thread, &frame, &context,
                              nullptr, SymFunctionTableAccess64, SymGetModuleBase64, nullptr)) {
                 break;
             }
-            if (frame.AddrPC.Offset == previousPc)
+            if (frame.AddrPC.Offset == 0)
             {
                 break;
             }
+            // The first call can initialize the walk by returning the input frame.
+            if (walkIndex == 0 && frame.AddrPC.Offset == previousPc &&
+                frame.AddrStack.Offset == previousSp)
+            {
+                continue;
+            }
+            if (frame.AddrPC.Offset == previousPc && frame.AddrStack.Offset == previousSp)
+            {
+                break;
+            }
+            captured.lines.push_back("  #" + std::to_string(printedFrames++) + " " +
+                                     FormatSymbol(frame.AddrPC.Offset));
         }
 
         if (useEntryReturnAddress && printedFrames <= 1)
         {
-            AppendEntryReturnStack(context, thread, printedFrames, kMaxFrames, captured.lines);
+            AppendEntryReturnStack(interruptedContext, thread, printedFrames, kMaxFrames,
+                                   captured.lines);
         }
 
         captured.valid = !captured.lines.empty();
@@ -551,16 +559,27 @@ private:
         callerFrame.AddrStack.Offset = callerContext.Rsp;
         callerFrame.AddrStack.Mode = AddrModeFlat;
 
+        bool firstWalk{true};
         while (printedFrames < maxFrames)
         {
             const DWORD64 previousPc{callerFrame.AddrPC.Offset};
+            const DWORD64 previousSp{callerFrame.AddrStack.Offset};
             if (!StackWalk64(IMAGE_FILE_MACHINE_AMD64, process_, thread, &callerFrame,
                              &callerContext, nullptr, SymFunctionTableAccess64,
                              SymGetModuleBase64, nullptr)) {
                 break;
             }
 
-            if (callerFrame.AddrPC.Offset == 0 || callerFrame.AddrPC.Offset == previousPc)
+            if (firstWalk && callerFrame.AddrPC.Offset == previousPc &&
+                callerFrame.AddrStack.Offset == previousSp)
+            {
+                firstWalk = false;
+                continue;
+            }
+            firstWalk = false;
+            if (callerFrame.AddrPC.Offset == 0 ||
+                (callerFrame.AddrPC.Offset == previousPc &&
+                 callerFrame.AddrStack.Offset == previousSp))
             {
                 break;
             }
@@ -953,7 +972,99 @@ struct ExceptionSnapshot
     bool firstChance{false};
     std::uint64_t address{0};
     std::vector<std::uint64_t> parameters;
+    std::vector<std::string> detailLines;
     std::vector<std::string> stackLines;
+};
+
+std::string CaptureCodeBytes(HANDLE process, std::uint64_t address,
+                             std::size_t count, const char* label)
+{
+    std::vector<BYTE> bytes(count);
+    SIZE_T bytesRead{0};
+    ReadProcessMemory(process, reinterpret_cast<LPCVOID>(address), bytes.data(), count,
+                      &bytesRead);
+    std::string line{"  "};
+    line += label;
+    line += " at " + miri::Hex64(address) + ":";
+    if (bytesRead == 0)
+    {
+        return line + " unavailable: " + miri::LastWin32ErrorMessage();
+    }
+    constexpr char digits[]{"0123456789ABCDEF"};
+    for (SIZE_T index{0}; index < bytesRead; ++index)
+    {
+        line += ' ';
+        line += digits[bytes[index] >> 4];
+        line += digits[bytes[index] & 15];
+    }
+    if (bytesRead < count) line += " (partial read)";
+    return line;
+}
+
+std::vector<std::string> CaptureFaultDetails(HANDLE process, const CONTEXT& context,
+                                            std::uint64_t address,
+                                            const miri::InstrumentationResult& instrumentation)
+{
+    std::vector<std::string> lines;
+    const std::pair<const char*, DWORD64> registers[]{
+        {"RIP", context.Rip}, {"RSP", context.Rsp}, {"RBP", context.Rbp},
+        {"RAX", context.Rax}, {"RBX", context.Rbx}, {"RCX", context.Rcx},
+        {"RDX", context.Rdx}, {"RSI", context.Rsi}, {"RDI", context.Rdi},
+        {"R8", context.R8}, {"R9", context.R9}, {"R10", context.R10},
+        {"R11", context.R11}, {"R12", context.R12}, {"R13", context.R13},
+        {"R14", context.R14}, {"R15", context.R15}, {"EFLAGS", context.EFlags}
+    };
+    for (std::size_t index{0}; index < std::size(registers); index += 3)
+    {
+        std::string line{"  "};
+        for (std::size_t offset{0}; offset < 3 && index + offset < std::size(registers);
+             ++offset)
+        {
+            if (offset != 0) line += "  ";
+            const auto& reg{registers[index + offset]};
+            line += std::string(reg.first) + '=' + miri::Hex64(reg.second);
+        }
+        lines.push_back(std::move(line));
+    }
+    lines.push_back(CaptureCodeBytes(process, address, 32, "fault instruction bytes"));
+
+    // InstrumentProcess returns records sorted by RVA (all in the main image).
+    const auto& records{instrumentation.records};
+    auto next{std::upper_bound(records.begin(), records.end(), address,
+        [](std::uint64_t pc, const miri::PatchResult& record) {
+            return pc < record.remoteAddress;
+        })};
+    if (next != records.begin())
+    {
+        const auto& record{*--next};
+        lines.push_back("  nearest preceding planned site: " +
+                        miri::WideToUtf8(record.function.name) + " at " +
+                        miri::Hex64(record.remoteAddress) + " +" +
+                        miri::Hex64(address - record.remoteAddress) +
+                        "; status=" + record.status +
+                        "; patch offset=" + std::to_string(record.patchOffset) +
+                        "; stolen bytes=" + std::to_string(record.stolenLength));
+        lines.push_back(CaptureCodeBytes(process, record.remoteAddress, 32,
+                                         "site entry bytes"));
+        if (record.patched && record.stubAddress != 0)
+        {
+            lines.push_back(CaptureCodeBytes(process, record.stubAddress, 96,
+                                             "trampoline bytes"));
+        }
+    }
+    return lines;
+}
+
+struct ExceptionHistory
+{
+    ExceptionSnapshot latest;
+    std::unordered_map<DWORD, ExceptionSnapshot> byThread;
+
+    const ExceptionSnapshot& ForThread(DWORD threadId) const
+    {
+        const auto found{byThread.find(threadId)};
+        return found == byThread.end() ? latest : found->second;
+    }
 };
 
 bool IsDebuggerInternalException(DWORD code)
@@ -1001,6 +1112,8 @@ std::string ExceptionCodeName(DWORD code)
         return "EXCEPTION_PRIV_INSTRUCTION";
     case EXCEPTION_STACK_OVERFLOW:
         return "EXCEPTION_STACK_OVERFLOW";
+    case 0x406D1388:
+        return "MS_VC_THREAD_NAME";
     default:
         return "exception";
     }
@@ -1009,16 +1122,19 @@ std::string ExceptionCodeName(DWORD code)
 void RememberExceptionSnapshot(const DEBUG_EVENT& event,
                                HANDLE thread,
                                StackPrinter& stackPrinter,
-                               ExceptionSnapshot& snapshot)
+                               ExceptionHistory& history,
+                               HANDLE process = nullptr,
+                               const miri::InstrumentationResult* instrumentation = nullptr)
 {
     const auto& exception{event.u.Exception};
     const DWORD code{exception.ExceptionRecord.ExceptionCode};
-    if (IsDebuggerInternalException(code))
+    if (IsDebuggerInternalException(code) ||
+        (code == 0x406D1388 && exception.dwFirstChance != 0))
     {
         return;
     }
 
-    snapshot = {};
+    ExceptionSnapshot snapshot;
     snapshot.have = true;
     snapshot.pid = event.dwProcessId;
     snapshot.threadId = event.dwThreadId;
@@ -1036,18 +1152,37 @@ void RememberExceptionSnapshot(const DEBUG_EVENT& event,
             exception.ExceptionRecord.ExceptionInformation[index]));
     }
 
+    if (process != nullptr && thread != nullptr && instrumentation != nullptr)
+    {
+        CONTEXT context{};
+        context.ContextFlags = CONTEXT_ALL;
+        if (GetThreadContext(thread, &context))
+        {
+            snapshot.detailLines = CaptureFaultDetails(process, context, snapshot.address,
+                                                       *instrumentation);
+        }
+        else
+        {
+            snapshot.detailLines.push_back("  fault context unavailable: " +
+                                            miri::LastWin32ErrorMessage());
+        }
+    }
     snapshot.stackLines = stackPrinter.CaptureStack(thread).lines;
+    history.latest = snapshot;
+    history.byThread[event.dwThreadId] = std::move(snapshot);
 }
 
 void PrintLastExceptionSnapshot(const ExceptionSnapshot& snapshot)
 {
     if (!snapshot.have)
     {
-        std::cerr << "\nlast non-breakpoint exception before termination: none observed\n";
+        std::cerr << "\nlast diagnostic exception before termination: none observed"
+                     " (first-chance thread naming notifications excluded)\n";
         return;
     }
 
-    std::cerr << "\nlast non-breakpoint exception before termination:\n";
+    std::cerr << "\nlast diagnostic exception before termination"
+                 " (terminating thread preferred; first-chance thread naming excluded):\n";
     std::cerr << "  " << ExceptionCodeName(snapshot.code) << " "
               << miri::Hex64(snapshot.code) << " at "
               << miri::Hex64(snapshot.address) << "\n";
@@ -1086,6 +1221,10 @@ void PrintLastExceptionSnapshot(const ExceptionSnapshot& snapshot)
         std::cerr << "\n";
     }
 
+    for (const auto& line : snapshot.detailLines)
+    {
+        std::cerr << line << "\n";
+    }
     for (const auto& line : snapshot.stackLines)
     {
         std::cerr << line << "\n";
@@ -1251,7 +1390,7 @@ bool LaunchAndProfile(const std::filesystem::path& exePath,
     bool wroteReport{false};
     bool printedTerminationStack{false};
     bool printedLastException{false};
-    ExceptionSnapshot lastException;
+    ExceptionHistory lastException;
     DWORD exitCode{0};
 
     for (;;)
@@ -1304,6 +1443,7 @@ bool LaunchAndProfile(const std::filesystem::path& exePath,
             break;
         case EXIT_THREAD_DEBUG_EVENT:
             debugThreads.Remove(event.dwThreadId);
+            lastException.byThread.erase(event.dwThreadId);
             break;
         case LOAD_DLL_DEBUG_EVENT:
             terminationBreakpoints.InstallFromLoadedModules(child.info.hProcess,
@@ -1323,12 +1463,13 @@ bool LaunchAndProfile(const std::filesystem::path& exePath,
             {
                 if (printedTerminationStack && !printedLastException)
                 {
-                    PrintLastExceptionSnapshot(lastException);
+                    PrintLastExceptionSnapshot(lastException.ForThread(event.dwThreadId));
                     printedLastException = true;
                 }
                 break;
             }
-            RememberExceptionSnapshot(event, thread, stackPrinter, lastException);
+            RememberExceptionSnapshot(event, thread, stackPrinter, lastException,
+                                      child.info.hProcess, &instrumentation);
             if (PrintSecondChanceExceptionStack(event, thread, stackPrinter))
             {
                 printedTerminationStack = true;
@@ -1346,7 +1487,7 @@ bool LaunchAndProfile(const std::filesystem::path& exePath,
             }
             if (!printedLastException)
             {
-                PrintLastExceptionSnapshot(lastException);
+                PrintLastExceptionSnapshot(lastException.ForThread(event.dwThreadId));
                 printedLastException = true;
             }
 
@@ -1433,7 +1574,7 @@ bool AttachAndProfile(DWORD pid,
     bool wroteReport{false};
     bool printedTerminationStack{false};
     bool printedLastException{false};
-    ExceptionSnapshot lastException;
+    ExceptionHistory lastException;
     DWORD exitCode{0};
 
     for (;;)
@@ -1501,6 +1642,7 @@ bool AttachAndProfile(DWORD pid,
             break;
         case EXIT_THREAD_DEBUG_EVENT:
             debugThreads.Remove(event.dwThreadId);
+            lastException.byThread.erase(event.dwThreadId);
             break;
         case LOAD_DLL_DEBUG_EVENT:
             terminationBreakpoints.InstallFromLoadedModules(process.Get(), event.dwProcessId);
@@ -1519,12 +1661,13 @@ bool AttachAndProfile(DWORD pid,
             {
                 if (printedTerminationStack && !printedLastException)
                 {
-                    PrintLastExceptionSnapshot(lastException);
+                    PrintLastExceptionSnapshot(lastException.ForThread(event.dwThreadId));
                     printedLastException = true;
                 }
                 break;
             }
-            RememberExceptionSnapshot(event, thread, stackPrinter, lastException);
+            RememberExceptionSnapshot(event, thread, stackPrinter, lastException,
+                                      process.Get(), &instrumentation);
             if (PrintSecondChanceExceptionStack(event, thread, stackPrinter))
             {
                 printedTerminationStack = true;
@@ -1542,7 +1685,7 @@ bool AttachAndProfile(DWORD pid,
             }
             if (!printedLastException)
             {
-                PrintLastExceptionSnapshot(lastException);
+                PrintLastExceptionSnapshot(lastException.ForThread(event.dwThreadId));
                 printedLastException = true;
             }
 
